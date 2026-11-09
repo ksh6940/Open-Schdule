@@ -222,12 +222,19 @@ openlab start -s delete 1
 
 ---
 
+## 👥 기여자 (Contributors)
+
+- **[ksh6940](https://github.com/ksh6940)** - 프로젝트 기획, 아키텍처 설계 및 리드 개발
+- **Gemini (Google DeepMind Antigravity)** - 페어 프로그래밍, 프레임리스 Apple Design System 및 Rust 코어/API 구현
+
+---
+
 ## 📄 라이선스 (License)
 
 본 프로젝트는 **Apache License, Version 2.0** 라이선스 하에 배포됩니다. 자세한 내용은 [LICENSE](./LICENSE) 파일을 참고하세요.
 
 ```text
-Copyright 2026 ksh6940 and OpenSchedule Contributors
+Copyright 2026 ksh6940, Gemini (Google DeepMind Antigravity), and OpenSchedule Contributors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

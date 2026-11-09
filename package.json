@@ -28,7 +28,10 @@
     "rust",
     "sqlite"
   ],
-  "author": "ksh6940",
+  "authors": [
+    "ksh6940",
+    "Gemini (Google DeepMind Antigravity)"
+  ],
   "license": "Apache-2.0",
   "type": "commonjs",
   "devDependencies": {
