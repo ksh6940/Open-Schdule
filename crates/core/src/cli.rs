@@ -1,24 +1,71 @@
-//! OpenSchedule CLI 모듈.
-//! 외부 AI 에이전트(Claude Code, Antigravity, Cursor 등) 및 터미널 사용자가
-//! 명령줄에서 일정을 추가/조회/수정/상태변경/삭제할 수 있도록 지원합니다.
+//! OpenSchedule / OpenLab CLI 모듈 (Claude Code CLI 스타일 인터랙티브 셸 & 명령어).
+//! - `openlab start -s`         : Claude Code 스타일 인터랙티브 CLI 실행
+//! - `openlab start -s program` : GUI 데스크톱 프로그램 실행
+//! - `openlab start -s <명령>`  : 단일 CLI 명령 실행 (AI 에이전트 & 스크립트 연동)
 
 use std::io::{self, Write};
 
 use anyhow::{anyhow, bail, Result};
-use chrono::{Duration, Local, NaiveDate, NaiveTime};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime};
 use serde_json::json;
 
 use crate::{
-    model::{Status, TodoDraft},
-    DateFilter, Store, TodoQuery,
+    model::{Status, Todo, TodoDraft},
+    paths, DateFilter, Store, TodoQuery,
 };
+
+// ── Claude Code ANSI 컬러 팔레트 ──
+const C_RESET: &str = "\x1b[0m";
+const C_BOLD: &str = "\x1b[1m";
+const C_DIM: &str = "\x1b[90m";
+/// Claude 시그니처 코랄/테라코타 오렌지
+const C_CLAUDE: &str = "\x1b[38;5;209m";
+/// 포인트 블루
+const C_BLUE: &str = "\x1b[38;5;75m";
+/// 완료 그린
+const C_GREEN: &str = "\x1b[38;5;78m";
+/// 진행중/예정 앰버
+const C_YELLOW: &str = "\x1b[38;5;214m";
+/// 조건부완료 퍼플
+const C_PURPLE: &str = "\x1b[38;5;141m";
+/// 경고/삭제 레드
+const C_RED: &str = "\x1b[38;5;203m";
+/// 밝은 화이트
+const C_WHITE: &str = "\x1b[97m";
+
+/// Windows 터미널에서 UTF-8 및 ANSI 이스케이프 컬러 활성화
+pub fn enable_ansi_support() {
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetStdHandle(nStdHandle: u32) -> isize;
+            fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
+            fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;
+            fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+            fn SetConsoleCP(wCodePageID: u32) -> i32;
+        }
+        const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+        const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+        unsafe {
+            SetConsoleOutputCP(65001);
+            SetConsoleCP(65001);
+            let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if handle != 0 && handle != -1 {
+                let mut mode: u32 = 0;
+                if GetConsoleMode(handle, &mut mode) != 0 {
+                    let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                }
+            }
+        }
+    }
+}
 
 /// 실행 모드 판별 결과
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchAction {
     /// GUI 프로그램 실행 (`openlab start -s program` 또는 인자 없음)
     RunGui,
-    /// 대화형 CLI 실행 (`openlab start -s`)
+    /// Claude Code 스타일 대화형 CLI 실행 (`openlab start -s`)
     RunInteractiveCli,
     /// 단일 CLI 명령 실행 (`openlab start -s <cmd>` 또는 `openschedule <cmd>`)
     RunCliCommand(Vec<String>),
@@ -30,7 +77,6 @@ pub fn parse_launch_action(raw_args: &[String]) -> LaunchAction {
         return LaunchAction::RunGui;
     }
 
-    // `openlab start -s` 및 `openlab start -s program` 처리
     if raw_args[0].eq_ignore_ascii_case("start") {
         let rest = &raw_args[1..];
         if rest.is_empty() {
@@ -84,34 +130,156 @@ pub fn is_cli_invocation(args: &[String]) -> bool {
     !matches!(parse_launch_action(args), LaunchAction::RunGui)
 }
 
-/// `openlab start -s` 입력 시 실행되는 심플 CLI 모드 (이전 버전 디자인 유지)
-pub fn run_interactive_cli() -> Result<()> {
-    let store = Store::open_default()?;
-    print_help();
+/// Claude Code 스타일 웰컴 박스 출력
+fn print_claude_banner(store: &Store) {
+    let counts = store.smart_counts().unwrap_or_default();
+    let json_files = store.list_json_schedule_files().unwrap_or_default();
+    let sched_dir = paths::schedules_dir();
+    let today_str = Local::now().format("%Y-%m-%d").to_string();
+
     println!();
+    println!(
+        "{C_CLAUDE}╭───{C_RESET} {C_BOLD}{C_WHITE}OpenLab Schedule{C_RESET} {C_DIM}v{}{C_RESET} {C_CLAUDE}──────────────────────────────────────────────╮{C_RESET}",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}                                                                          {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}  {C_CLAUDE}✻{C_RESET} {C_BOLD}{C_WHITE}Welcome to OpenLab Schedule CLI!{C_RESET}                                      {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}                                                                          {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}/help{C_RESET} 명령어 도움말 · {C_DIM}/cal{C_RESET} 캘린더 뷰 · {C_DIM}/list{C_RESET} 투두리스트 · {C_DIM}/program{C_RESET} GUI   {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}자연어 입력 예:{C_RESET} {C_BLUE}내일 오후 2시 프로젝트 미팅 #업무{C_RESET}                     {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}                                                                          {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}storage:{C_RESET} SQLite + {C_WHITE}{{date}}_schedule.json{C_RESET} ({} files in schedules/)",
+        json_files.len()
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}path:{C_RESET}    {}",
+        sched_dir.display()
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}today:{C_RESET}   {today_str} · {C_BLUE}오늘 {}개{C_RESET} · {C_YELLOW}예정 {}개{C_RESET} · {C_WHITE}전체 {}개{C_RESET} · {C_GREEN}완료 {}개{C_RESET}",
+        counts.today, counts.scheduled, counts.all, counts.completed
+    );
+    println!(
+        "{C_CLAUDE}╰──────────────────────────────────────────────────────────────────────────╯{C_RESET}"
+    );
+}
+
+/// `openlab start -s` 입력 시 실행되는 Claude Code 스타일 인터랙티브 CLI
+pub fn run_interactive_cli() -> Result<()> {
+    enable_ansi_support();
+    let store = Store::open_default()?;
+    print_claude_banner(&store);
+
+    // 오늘 할 일이 있으면 시작 시 브리핑 표시
+    let today_todos = store
+        .query(&TodoQuery {
+            date: DateFilter::TodayAndOverdue,
+            ..Default::default()
+        })
+        .unwrap_or_default();
+    if !today_todos.is_empty() {
+        println!();
+        println!(
+            "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Today({}){C_RESET}",
+            Local::now().format("%Y-%m-%d")
+        );
+        render_todo_box(&store, &today_todos);
+    }
 
     let stdin = io::stdin();
     loop {
-        print!("openschedule> ");
+        println!();
+        println!(
+            "{C_DIM}────────────────────────────────────────────────────────────────────────────{C_RESET}"
+        );
+        print!("{C_CLAUDE}{C_BOLD}❯{C_RESET} ");
         io::stdout().flush().ok();
 
         let mut line = String::new();
         let bytes = stdin.read_line(&mut line)?;
         if bytes == 0 {
+            println!();
             break;
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
+
+        // 종료 명령어
         if matches!(
             trimmed.to_lowercase().as_str(),
-            "exit" | "quit" | "q" | "종료"
+            "exit" | "quit" | "q" | "/exit" | "/quit" | "/q" | "종료" | "/종료" | "0"
         ) {
+            println!(
+                "\n{C_CLAUDE}⏺{C_RESET} {C_DIM}세션을 종료합니다. (일정 데이터는 SQLite 및 schedules/{{date}}_schedule.json에 안전하게 저장되었습니다){C_RESET}"
+            );
             break;
         }
 
+        // 화면 지우기
+        if matches!(
+            trimmed.to_lowercase().as_str(),
+            "/clear" | "clear" | "/cls" | "cls"
+        ) {
+            print!("\x1b[2J\x1b[1;1H");
+            io::stdout().flush().ok();
+            print_claude_banner(&store);
+            continue;
+        }
+
+        // GUI 프로그램 실행
+        if matches!(
+            trimmed.to_lowercase().as_str(),
+            "/program" | "program" | "/gui" | "gui"
+        ) {
+            let exe = paths::sibling_exe("openlab");
+            println!(
+                "\n{C_CLAUDE}⏺{C_RESET} {C_BOLD}Launch(openlab start -s program){C_RESET}"
+            );
+            match std::process::Command::new(&exe)
+                .args(["start", "-s", "program"])
+                .spawn()
+            {
+                Ok(_) => {
+                    println!(
+                        "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ GUI 데스크톱 프로그램이 실행되었습니다.{C_RESET}"
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "  {C_DIM}⎿{C_RESET}  {C_RED}✗ GUI 실행 실패: {e}{C_RESET}"
+                    );
+                }
+            }
+            continue;
+        }
+
+        // 도움말 단축키
+        if trimmed == "?" || trimmed.eq_ignore_ascii_case("/help") || trimmed.eq_ignore_ascii_case("help") {
+            print_help();
+            continue;
+        }
+
         let mut tokens = split_cli_tokens(trimmed);
+        if tokens.is_empty() {
+            continue;
+        }
+
+        // 앞에 `openlab`, `openschedule`, `start -s`가 붙은 경우 제거
         if tokens
             .first()
             .map(|s| s.eq_ignore_ascii_case("openschedule") || s.eq_ignore_ascii_case("openlab"))
@@ -126,16 +294,193 @@ pub fn run_interactive_cli() -> Result<()> {
             continue;
         }
 
-        if let Err(e) = execute_with_store(&store, &tokens) {
-            eprintln!("오류: {e}");
+        // 선행 슬래시(`/add` -> `add`) 제거 지원
+        let first_cmd = tokens[0].trim_start_matches('/').to_lowercase();
+        if is_known_command(&first_cmd) {
+            tokens[0] = first_cmd;
+            if let Err(e) = execute_with_store(&store, &tokens) {
+                println!(
+                    "\n{C_RED}⏺ Error{C_RESET}\n  {C_DIM}⎿{C_RESET}  {C_RED}{e}{C_RESET}"
+                );
+            }
+        } else {
+            // 명령어가 아니면 Claude Code처럼 자연어 문장으로 해석해 바로 할 일 추가!
+            if let Err(e) = handle_natural_language_add(&store, trimmed) {
+                println!(
+                    "\n{C_RED}⏺ Error{C_RESET}\n  {C_DIM}⎿{C_RESET}  {C_RED}{e}{C_RESET}"
+                );
+            }
         }
     }
 
     Ok(())
 }
 
+fn is_known_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "add"
+            | "create"
+            | "new"
+            | "추가"
+            | "등록"
+            | "list"
+            | "ls"
+            | "todo"
+            | "todos"
+            | "목록"
+            | "조회"
+            | "today"
+            | "오늘"
+            | "cal"
+            | "calendar"
+            | "달력"
+            | "캘린더"
+            | "get"
+            | "show"
+            | "done"
+            | "complete"
+            | "완료"
+            | "status"
+            | "상태"
+            | "update"
+            | "edit"
+            | "수정"
+            | "delete"
+            | "rm"
+            | "remove"
+            | "삭제"
+            | "categories"
+            | "cats"
+            | "cat"
+            | "category"
+            | "카테고리"
+            | "summary"
+            | "counts"
+            | "요약"
+            | "sync"
+            | "json"
+            | "load"
+            | "동기화"
+            | "help"
+            | "--help"
+            | "-h"
+    )
+}
+
+/// 자연어 입력(예: "내일 오후 2시 팀 주간 회의 #업무 // 분기 목표 점검")을 파싱해 일정 등록
+fn handle_natural_language_add(store: &Store, input: &str) -> Result<()> {
+    let today = Local::now().date_naive();
+    let mut due_date = today;
+    let mut due_time: Option<NaiveTime> = None;
+    let mut category_name: Option<String> = None;
+
+    // `//` 또는 `--memo` 뒤의 내용은 메모로 분리
+    let (main_part, memo) = if let Some((left, right)) = input.split_once("//") {
+        (left.trim(), right.trim().to_string())
+    } else {
+        (input.trim(), String::new())
+    };
+
+    let words: Vec<&str> = main_part.split_whitespace().collect();
+    let mut title_words: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < words.len() {
+        let w = words[i];
+
+        // #카테고리 태그 인식
+        if let Some(cat) = w.strip_prefix('#') {
+            if !cat.is_empty() {
+                category_name = Some(cat.to_string());
+                i += 1;
+                continue;
+            }
+        }
+
+        // 날짜 단어 인식 ("오늘", "내일", "모레", "다음주", "YYYY-MM-DD")
+        if matches!(w, "오늘" | "내일" | "모레" | "다음주" | "today" | "tomorrow")
+            || (w.len() == 10 && w.chars().filter(|&c| c == '-').count() == 2)
+        {
+            if let Ok(d) = parse_flexible_date(w) {
+                due_date = d;
+                i += 1;
+                continue;
+            }
+        }
+
+        // "오전/오후 N시 [M분]" 2~3단어 시간 인식
+        if matches!(w, "오전" | "오후") && i + 1 < words.len() && words[i + 1].contains('시') {
+            let mut combined = format!("{} {}", w, words[i + 1]);
+            let mut step = 2;
+            if i + 2 < words.len() && words[i + 2].ends_with('분') {
+                combined.push(' ');
+                combined.push_str(words[i + 2]);
+                step = 3;
+            }
+            if let Ok(Some(t)) = parse_flexible_time(&combined) {
+                due_time = Some(t);
+                i += step;
+                continue;
+            }
+        }
+
+        // "14:00" 또는 "15시" 단일 단어 시간 인식
+        if (w.contains(':') && w.len() <= 5) || w.ends_with('시') {
+            if let Ok(Some(t)) = parse_flexible_time(w) {
+                due_time = Some(t);
+                i += 1;
+                continue;
+            }
+        }
+
+        // 끝에 붙은 "추가", "추가해줘", "등록" 제거
+        if i == words.len() - 1 && matches!(w, "추가" | "추가해줘" | "등록" | "등록해줘") && !title_words.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        title_words.push(w.to_string());
+        i += 1;
+    }
+
+    let title = title_words.join(" ").trim().to_string();
+    if title.is_empty() {
+        bail!("할 일 제목을 인식하지 못했습니다. `/help`를 입력해 사용법을 확인하세요.");
+    }
+
+    let category_id = match category_name {
+        Some(ref c) => resolve_category(store, c, true)?,
+        None => None,
+    };
+
+    let draft = TodoDraft {
+        title,
+        memo,
+        category_id,
+        due_date,
+        due_time,
+        status: Status::Planned,
+        condition_note: String::new(),
+    };
+
+    let id = store.add(&draft)?;
+    let todo = store
+        .get(id)?
+        .ok_or_else(|| anyhow!("생성된 일정을 불러오지 못했습니다."))?;
+    let cats = store.categories()?;
+    let cat_name = todo
+        .category_id
+        .and_then(|cid| cats.iter().find(|c| c.id == cid).map(|c| c.name.as_str()))
+        .unwrap_or("미분류");
+
+    print_claude_todo_added(&todo, cat_name);
+    Ok(())
+}
+
 pub fn run_cli(args: &[String]) -> Result<()> {
-    if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
+    enable_ansi_support();
+    if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h" | "/help") {
         print_help();
         return Ok(());
     }
@@ -150,76 +495,194 @@ pub fn run_cli(args: &[String]) -> Result<()> {
 }
 
 fn execute_with_store(store: &Store, args: &[String]) -> Result<()> {
-    if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
+    if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h" | "/help") {
         print_help();
         return Ok(());
     }
 
-    let cmd = args[0].as_str();
+    let cmd = args[0].trim_start_matches('/');
     let rest = &args[1..];
 
     match cmd {
         "add" | "create" | "new" | "추가" | "등록" => cmd_add(store, rest),
-        "list" | "ls" | "목록" | "조회" => cmd_list(store, rest),
+        "list" | "ls" | "todo" | "todos" | "목록" | "조회" => cmd_list(store, rest),
+        "today" | "오늘" => {
+            let mut v = vec!["--filter".to_string(), "today_and_overdue".to_string()];
+            v.extend_from_slice(rest);
+            cmd_list(store, &v)
+        }
+        "cal" | "calendar" | "달력" | "캘린더" => cmd_calendar(store, rest),
         "get" | "show" => cmd_get(store, rest),
         "done" | "complete" | "완료" => cmd_done(store, rest),
         "status" | "상태" => cmd_status(store, rest),
         "update" | "edit" | "수정" => cmd_update(store, rest),
         "delete" | "rm" | "remove" | "삭제" => cmd_delete(store, rest),
-        "categories" | "cats" | "category" | "카테고리" => cmd_categories(store, rest),
+        "categories" | "cats" | "cat" | "category" | "카테고리" => cmd_categories(store, rest),
         "summary" | "counts" | "요약" => cmd_summary(store, rest),
-        "sync" | "load" | "동기화" => {
-            let count = store.sync_all_json_files()?;
-            println!("✓ 일자별 {{date}}_schedule.json 동기화 완료 ({count}개 파일)");
-            Ok(())
-        }
+        "sync" | "json" | "load" | "동기화" => cmd_json_sync(store, rest),
         other => {
-            bail!("알 수 없는 명령어입니다: '{other}'\n사용법을 보려면 `openschedule --help`를 실행하세요.");
+            bail!("알 수 없는 명령어입니다: '{other}'\n사용법을 보려면 `/help` 또는 `openlab start -s help`를 실행하세요.");
         }
     }
 }
 
 pub fn print_help() {
+    println!();
     println!(
-        r##"OpenSchedule CLI - 일정 관리 명령줄 도구 (AI 에이전트 & 터미널 연동)
+        "{C_CLAUDE}╭───{C_RESET} {C_BOLD}{C_WHITE}OpenLab Schedule CLI Commands{C_RESET} {C_CLAUDE}────────────────────────────────────────╮{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}  {C_BOLD}실행 명령어 (일반 터미널){C_RESET}                                               {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_CLAUDE}openlab start -s{C_RESET}                 Claude Code 스타일 인터랙티브 CLI    {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_CLAUDE}openlab start -s program{C_RESET}         GUI 데스크톱 프로그램 실행           {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_CLAUDE}openlab start -s <명령> [옵션]{C_RESET}   단일 명령 즉시 실행 (AI 연동)        {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}├──────────────────────────────────────────────────────────────────────────┤{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}  {C_BOLD}슬래시 & CLI 명령어 (인터랙티브 셸에서 `/` 생략 가능){C_RESET}                   {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/add{C_RESET} <제목> [-d 날짜] [-t 시간] [-c 목록] [-m 메모]  새 할 일 추가    {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/list{C_RESET} [today|scheduled|all|completed|YYYY-MM-DD]     할 일 목록 조회  {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/today{C_RESET}                                               오늘 할 일 조회  {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/cal{C_RESET} [YYYY-MM]                                       월간 캘린더 뷰   {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/done{C_RESET} <ID> [--condition <사유>]                      완료 처리        {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/status{C_RESET} <ID> <planned|in_progress|conditional_done|done> 상태 변경    {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/edit{C_RESET} <ID> [--title ..] [-d ..] [-t ..] [-c ..]      할 일 수정       {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/delete{C_RESET} <ID>                                         할 일 삭제       {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/cat{C_RESET} [add <이름> --color #HEX | delete <ID>]         카테고리 관리    {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/sync{C_RESET}                                                JSON ⇄ SQL 동기화{C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/program{C_RESET} · {C_BLUE}/clear{C_RESET} · {C_BLUE}/exit{C_RESET}                            GUI실행/초기화/끝{C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}├──────────────────────────────────────────────────────────────────────────┤{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}  {C_BOLD}자연어 빠른 입력 (명령어 없이 프롬프트에 바로 입력){C_RESET}                     {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}❯{C_RESET} 내일 오후 2시 팀 주간 회의 #업무 // 분기 목표 점검                  {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}│{C_RESET}    {C_DIM}❯{C_RESET} 오늘 19:00 저녁 유산소 운동 #건강                                   {C_CLAUDE}│{C_RESET}"
+    );
+    println!(
+        "{C_CLAUDE}╰──────────────────────────────────────────────────────────────────────────╯{C_RESET}"
+    );
+}
 
-사용법:
-  openlab start -s                     CLI 실행
-  openlab start -s program             GUI 프로그램 실행
-  openschedule <COMMAND> [OPTIONS]     단일 명령 실행
+fn status_colored(st: Status) -> String {
+    match st {
+        Status::Planned => format!("{C_DIM}{} {}{C_RESET}", st.icon(), st.label()),
+        Status::InProgress => format!("{C_YELLOW}{} {}{C_RESET}", st.icon(), st.label()),
+        Status::ConditionalDone => format!("{C_PURPLE}{} {}{C_RESET}", st.icon(), st.label()),
+        Status::Done => format!("{C_GREEN}{} {}{C_RESET}", st.icon(), st.label()),
+    }
+}
 
-명령어 (Commands):
-  add, 추가       새 일정 추가
-                  예: openschedule add "팀 주간 회의" --date tomorrow --time 14:00 --category 업무 --memo "분기 목표 점검"
-                  예: openschedule add "운동하기" -d 오늘 -t 19:00 -c 건강
-  list, 조회      일정 목록 조회
-                  예: openschedule list                          (전체 조회)
-                  예: openschedule list --filter today           (오늘 일정)
-                  예: openschedule list --filter scheduled       (예정 일정)
-                  예: openschedule list --category 업무 --json   (JSON 포맷 출력)
-  done, 완료      일정을 완료(또는 조건부완료) 처리
-                  예: openschedule done 1
-                  예: openschedule done 2 --condition "검토 대기"
-  status, 상태    일정 상태 변경 (planned | in_progress | conditional_done | done)
-                  예: openschedule status 1 in_progress
-  update, 수정    일정 상세 정보 수정
-                  예: openschedule update 1 --title "수정된 제목" --date 2026-11-15 --time 10:30
-  delete, 삭제    일정 삭제
-                  예: openschedule delete 1
-  categories      카테고리(목록) 조회 / 추가 / 삭제
-                  예: openschedule categories
-                  예: openschedule categories add "프로젝트" --color "#AF52DE"
-  summary, 요약   스마트 카운트 및 오늘의 일정 요약 출력
-                  예: openschedule summary [--json]
+fn print_claude_todo_added(todo: &Todo, cat_name: &str) {
+    let json_name = format!("schedules/{}_schedule.json", todo.due_date.format("%Y-%m-%d"));
+    let time_str = todo
+        .due_time
+        .map(|t| format!(" {}", t.format("%H:%M")))
+        .unwrap_or_default();
+    println!();
+    println!(
+        "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Write({json_name}){C_RESET}"
+    );
+    println!(
+        "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 일정 등록 완료{C_RESET} {C_BOLD}[ID: #{}]{C_RESET} \"{}\"",
+        todo.id, todo.title
+    );
+    println!(
+        "     {C_DIM}기한:{C_RESET} {}{} · {C_DIM}목록:{C_RESET} {C_BLUE}{cat_name}{C_RESET} · {C_DIM}상태:{C_RESET} {}",
+        todo.due_date.format("%Y-%m-%d"),
+        time_str,
+        status_colored(todo.status)
+    );
+    if !todo.memo.trim().is_empty() {
+        println!("     {C_DIM}메모:{C_RESET} {}", todo.memo.trim());
+    }
+}
 
-공통 옵션:
-  -d, --date <DATE>        날짜: YYYY-MM-DD, MM-DD, today(오늘), tomorrow(내일), 모레, next-week(다음주), +3d
-  -t, --time <TIME>        시간: HH:MM (예: 09:00, 14:30), 오후 3시, 15시, 또는 none(삭제)
-  -c, --category <NAME>    카테고리 이름 또는 ID (없는 이름 입력 시 자동 생성)
-  -m, --memo <TEXT>        메모 내용
-  -s, --status <STATUS>    상태: planned(진행예정), in_progress(진행중), conditional_done(조건부완료), done(완료)
-      --condition <TEXT>   조건부완료 시 조건 메모
-      --json               AI 및 스크립트 파싱을 위한 JSON 출력"##
+fn render_todo_box(store: &Store, todos: &[Todo]) {
+    let cats = store.categories().unwrap_or_default();
+    let today = Local::now().date_naive();
+
+    println!(
+        "  {C_DIM}⎿{C_RESET}  총 {C_BOLD}{}{C_RESET}개의 일정",
+        todos.len()
+    );
+    println!(
+        "     {C_DIM}╭────────────────────────────────────────────────────────────────────╮{C_RESET}"
+    );
+    for t in todos {
+        let cat_name = t
+            .category_id
+            .and_then(|cid| cats.iter().find(|c| c.id == cid).map(|c| c.name.as_str()))
+            .unwrap_or("미분류");
+        let time_str = t
+            .due_time
+            .map(|tm| format!(" {}", tm.format("%H:%M")))
+            .unwrap_or_else(|| "      ".to_string());
+        let overdue_badge = if t.is_overdue(today) {
+            format!(" {C_RED}[기한초과]{C_RESET}")
+        } else {
+            String::new()
+        };
+        println!(
+            "     {C_DIM}│{C_RESET} {C_BOLD}#{:<3}{C_RESET} {}  {}{}{}  {C_BLUE}[{}]{C_RESET} {}",
+            t.id,
+            status_colored(t.status),
+            t.due_date.format("%Y-%m-%d"),
+            time_str,
+            overdue_badge,
+            cat_name,
+            t.title
+        );
+        if !t.condition_note.trim().is_empty() {
+            println!(
+                "     {C_DIM}│      ⎿{C_RESET} {C_PURPLE}조건: {}{C_RESET}",
+                t.condition_note.trim()
+            );
+        }
+        if !t.memo.trim().is_empty() {
+            println!(
+                "     {C_DIM}│      ⎿ 메모: {}{C_RESET}",
+                t.memo.trim()
+            );
+        }
+    }
+    println!(
+        "     {C_DIM}╰────────────────────────────────────────────────────────────────────╯{C_RESET}"
     );
 }
 
@@ -267,7 +730,6 @@ pub fn parse_flexible_date(input: &str) -> Result<NaiveDate> {
         _ => {}
     }
 
-    // +Nd 또는 +Nw 형식 (예: +3d, +2w)
     if let Some(rest) = s.strip_prefix('+') {
         if let Some(days_str) = rest.strip_suffix('d').or_else(|| rest.strip_suffix("일")) {
             if let Ok(d) = days_str.trim().parse::<i64>() {
@@ -281,17 +743,14 @@ pub fn parse_flexible_date(input: &str) -> Result<NaiveDate> {
         }
     }
 
-    // YYYY-MM-DD 또는 YYYY/MM/DD 또는 YYYY.MM.DD
     let normalized = s.replace(['/', '.'], "-");
     if let Ok(d) = NaiveDate::parse_from_str(&normalized, "%Y-%m-%d") {
         return Ok(d);
     }
 
-    // MM-DD 형식 (올해 기준)
     let parts: Vec<&str> = normalized.split('-').collect();
     if parts.len() == 2 {
         if let (Ok(m), Ok(d)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-            use chrono::Datelike;
             if let Some(date) = NaiveDate::from_ymd_opt(today.year(), m, d) {
                 return Ok(date);
             }
@@ -315,7 +774,6 @@ pub fn parse_flexible_time(input: &str) -> Result<Option<NaiveTime>> {
         return Ok(Some(t));
     }
 
-    // "오후 3시 30분", "오전 9시", "15시" 등 처리
     let is_pm = s.contains("오후") || s.contains("pm");
     let is_am = s.contains("오전") || s.contains("am");
     let cleaned = s
@@ -346,7 +804,6 @@ pub fn parse_flexible_time(input: &str) -> Result<Option<NaiveTime>> {
         }
     }
 
-    // 단순 숫자 시간 (예: "15" -> 15:00)
     if let Ok(mut hour) = cleaned.parse::<u32>() {
         if is_pm && hour < 12 {
             hour += 12;
@@ -444,6 +901,9 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
             "--json" => {
                 json_output = true;
             }
+            arg if arg.starts_with('#') && arg.len() > 1 => {
+                category_arg = Some(arg.trim_start_matches('#').to_string());
+            }
             arg if arg.starts_with('-') => {
                 bail!("알 수 없는 옵션입니다: '{arg}'");
             }
@@ -456,7 +916,7 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
 
     let title = title_parts.join(" ").trim().to_string();
     if title.is_empty() {
-        bail!("일정 제목을 입력해주세요.\n예: openschedule add \"팀 회의\" --date tomorrow --time 14:00 --category 업무");
+        bail!("일정 제목을 입력해주세요.\n예: /add \"팀 회의\" -d 내일 -t 14:00 -c 업무");
     }
 
     let category_id = match category_arg {
@@ -500,19 +960,7 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else {
-        let time_str = todo
-            .due_time
-            .map(|t| format!(" {}", t.format("%H:%M")))
-            .unwrap_or_default();
-        println!(
-            "✓ 일정 등록 완료 [ID: #{}] \"{}\" | 기한: {}{} | 목록: {} | 상태: {}",
-            todo.id,
-            todo.title,
-            todo.due_date.format("%Y-%m-%d"),
-            time_str,
-            cat_name,
-            todo.status.label()
-        );
+        print_claude_todo_added(&todo, cat_name);
     }
 
     Ok(())
@@ -598,49 +1046,110 @@ fn cmd_list(store: &Store, args: &[String]) -> Result<()> {
         statuses,
         search,
     })?;
-    let cats = store.categories()?;
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&todos)?);
         return Ok(());
     }
 
+    let filter_label = match filter {
+        DateFilter::Day(d) => format!("schedules/{}_schedule.json", d.format("%Y-%m-%d")),
+        DateFilter::Today | DateFilter::TodayAndOverdue => "Today".to_string(),
+        DateFilter::Scheduled => "Scheduled".to_string(),
+        DateFilter::Completed => "Completed".to_string(),
+        DateFilter::ThisWeek => "ThisWeek".to_string(),
+        _ => "All Schedules".to_string(),
+    };
+
+    println!();
+    println!("{C_CLAUDE}⏺{C_RESET} {C_BOLD}Read({filter_label}){C_RESET}");
     if todos.is_empty() {
-        println!("조회된 일정이 없습니다.");
+        println!("  {C_DIM}⎿  조회된 일정이 없습니다.{C_RESET}");
         return Ok(());
     }
 
-    println!("총 {}개의 일정:", todos.len());
-    for t in &todos {
-        let cat_name = t
-            .category_id
-            .and_then(|cid| cats.iter().find(|c| c.id == cid).map(|c| c.name.as_str()))
-            .unwrap_or("미분류");
-        let time_str = t
-            .due_time
-            .map(|tm| format!(" {}", tm.format("%H:%M")))
-            .unwrap_or_default();
-        let memo_str = if t.memo.trim().is_empty() {
-            String::new()
+    render_todo_box(store, &todos);
+    Ok(())
+}
+
+/// Claude Code 스타일 터미널 월간 캘린더 뷰 (`/cal [YYYY-MM]`)
+fn cmd_calendar(store: &Store, args: &[String]) -> Result<()> {
+    let today = Local::now().date_naive();
+    let (year, month) = if let Some(arg) = args.first() {
+        let parts: Vec<&str> = arg.split(['-', '/', '.']).collect();
+        if parts.len() >= 2 {
+            let y = parts[0].parse::<i32>().unwrap_or(today.year());
+            let m = parts[1].parse::<u32>().unwrap_or(today.month()).clamp(1, 12);
+            (y, m)
+        } else if let Ok(m) = arg.parse::<u32>() {
+            (today.year(), m.clamp(1, 12))
         } else {
-            format!(" — {}", t.memo.trim())
-        };
-        let cond_str = if t.condition_note.trim().is_empty() {
-            String::new()
-        } else {
-            format!(" [조건: {}]", t.condition_note.trim())
-        };
+            (today.year(), today.month())
+        }
+    } else {
+        (today.year(), today.month())
+    };
+
+    let month_todos = store.todos_by_month(year, month)?;
+    let first_day = NaiveDate::from_ymd_opt(year, month, 1).unwrap_or(today);
+    let start_offset = first_day.weekday().num_days_from_sunday() as i64;
+    let grid_start = first_day - Duration::days(start_offset);
+
+    println!();
+    println!(
+        "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Calendar({year}년 {month:02}월){C_RESET}"
+    );
+    println!(
+        "  {C_DIM}⎿{C_RESET}  {C_DIM}╭────────┬────────┬────────┬────────┬────────┬────────┬────────╮{C_RESET}"
+    );
+    println!(
+        "     {C_DIM}│{C_RESET} {C_RED}  일   {C_RESET}{C_DIM}│{C_RESET}   월   {C_DIM}│{C_RESET}   화   {C_DIM}│{C_RESET}   수   {C_DIM}│{C_RESET}   목   {C_DIM}│{C_RESET}   금   {C_DIM}│{C_RESET} {C_BLUE}  토   {C_RESET}{C_DIM}│{C_RESET}"
+    );
+    println!(
+        "     {C_DIM}├────────┼────────┼────────┼────────┼────────┼────────┼────────┤{C_RESET}"
+    );
+
+    for week in 0..6 {
+        let mut row_str = format!("     {C_DIM}│{C_RESET}");
+        for dow in 0..7 {
+            let d = grid_start + Duration::days(week * 7 + dow);
+            let in_month = d.month() == month;
+            let is_today = d == today;
+            let cnt = month_todos.get(&d).map(|v| v.len()).unwrap_or(0);
+
+            let cell_text = if !in_month {
+                format!("{C_DIM}  {:2}    {C_RESET}", d.day())
+            } else if is_today && cnt > 0 {
+                format!("{C_CLAUDE}{C_BOLD}[{:2}]{C_RESET}{C_GREEN}+{:<2}{C_RESET} ", d.day(), cnt)
+            } else if is_today {
+                format!("{C_CLAUDE}{C_BOLD}[{:2}]   {C_RESET}", d.day())
+            } else if cnt > 0 {
+                format!("{C_WHITE} {:2}{C_RESET} {C_GREEN}•{:<2}{C_RESET} ", d.day(), cnt)
+            } else if dow == 0 {
+                format!("{C_RED}  {:2}    {C_RESET}", d.day())
+            } else if dow == 6 {
+                format!("{C_BLUE}  {:2}    {C_RESET}", d.day())
+            } else {
+                format!("  {:2}    ", d.day())
+            };
+
+            row_str.push_str(&cell_text);
+            row_str.push_str(&format!("{C_DIM}│{C_RESET}"));
+        }
+        println!("{row_str}");
+    }
+    println!(
+        "     {C_DIM}╰────────┴────────┴────────┴────────┴────────┴────────┴────────╯{C_RESET}"
+    );
+
+    // 이번 달 일정 목록 함께 표시
+    let mut flat_todos: Vec<Todo> = month_todos.into_values().flatten().collect();
+    flat_todos.sort_by_key(|t| (t.due_date, t.due_time));
+    if !flat_todos.is_empty() {
+        render_todo_box(store, &flat_todos);
+    } else {
         println!(
-            "  [#{:<3}] {} {:<6} | {}{} | [{}] {}{}{}",
-            t.id,
-            t.status.icon(),
-            t.status.label(),
-            t.due_date.format("%Y-%m-%d"),
-            time_str,
-            cat_name,
-            t.title,
-            cond_str,
-            memo_str
+            "     {C_DIM}{year}년 {month:02}월에 등록된 일정이 없습니다.{C_RESET}"
         );
     }
 
@@ -649,29 +1158,24 @@ fn cmd_list(store: &Store, args: &[String]) -> Result<()> {
 
 fn cmd_get(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("조회할 일정 ID를 입력해주세요. 예: openschedule get 1");
+        bail!("조회할 일정 ID를 입력해주세요. 예: /get 1");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
         .parse()
         .map_err(|_| anyhow!("올바른 일정 ID가 아닙니다: '{}'", args[0]))?;
-    let json_output = args.iter().any(|a| a == "--json");
 
     let todo = store
         .get(id)?
         .ok_or_else(|| anyhow!("ID #{id} 일정을 찾을 수 없습니다."))?;
 
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&todo)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&todo)?);
-    }
+    println!("{}", serde_json::to_string_pretty(&todo)?);
     Ok(())
 }
 
 fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("완료 처리할 일정 ID를 입력해주세요. 예: openschedule done 1");
+        bail!("완료 처리할 일정 ID를 입력해주세요. 예: /done 1");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -722,11 +1226,16 @@ fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else {
+        println!();
         println!(
-            "✓ 일정 완료 처리됨 [ID: #{}] \"{}\" -> {}",
+            "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Update(schedules/{}_schedule.json){C_RESET}",
+            updated.due_date.format("%Y-%m-%d")
+        );
+        println!(
+            "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 일정 완료 처리됨{C_RESET} {C_BOLD}[ID: #{}]{C_RESET} \"{}\" -> {}",
             updated.id,
             updated.title,
-            updated.status.label()
+            status_colored(updated.status)
         );
     }
     Ok(())
@@ -734,7 +1243,7 @@ fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
 
 fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
     if args.len() < 2 {
-        bail!("사용법: openschedule status <ID> <STATUS> [--condition <메모>]\n상태값: planned(진행예정), in_progress(진행중), conditional_done(조건부완료), done(완료)");
+        bail!("사용법: /status <ID> <STATUS> [--condition <메모>]\n상태값: planned(진행예정), in_progress(진행중), conditional_done(조건부완료), done(완료)");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -784,11 +1293,16 @@ fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else {
+        println!();
         println!(
-            "✓ 상태 변경됨 [ID: #{}] \"{}\" -> {}",
+            "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Update(schedules/{}_schedule.json){C_RESET}",
+            updated.due_date.format("%Y-%m-%d")
+        );
+        println!(
+            "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 상태 변경됨{C_RESET} {C_BOLD}[ID: #{}]{C_RESET} \"{}\" -> {}",
             updated.id,
             updated.title,
-            updated.status.label()
+            status_colored(updated.status)
         );
     }
     Ok(())
@@ -796,7 +1310,7 @@ fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
 
 fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("수정할 일정 ID를 입력해주세요. 예: openschedule update 1 --title \"새 제목\" --date tomorrow");
+        bail!("수정할 일정 ID를 입력해주세요. 예: /edit 1 --title \"새 제목\" --date tomorrow");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -881,8 +1395,13 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else {
+        println!();
         println!(
-            "✓ 일정 수정 완료 [ID: #{}] \"{}\" (기한: {})",
+            "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Update(schedules/{}_schedule.json){C_RESET}",
+            updated.due_date.format("%Y-%m-%d")
+        );
+        println!(
+            "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 일정 수정 완료{C_RESET} {C_BOLD}[ID: #{}]{C_RESET} \"{}\" (기한: {})",
             updated.id,
             updated.title,
             updated.due_date.format("%Y-%m-%d")
@@ -893,7 +1412,7 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
 
 fn cmd_delete(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("삭제할 일정 ID를 입력해주세요. 예: openschedule delete 1");
+        bail!("삭제할 일정 ID를 입력해주세요. 예: /delete 1");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -915,9 +1434,22 @@ fn cmd_delete(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else if let Some(t) = existing {
-        println!("✓ 일정 삭제 완료 [ID: #{}] \"{}\"", id, t.title);
+        println!();
+        println!(
+            "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Delete(schedules/{}_schedule.json){C_RESET}",
+            t.due_date.format("%Y-%m-%d")
+        );
+        println!(
+            "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 일정 삭제 완료{C_RESET} {C_BOLD}[ID: #{}]{C_RESET} \"{}\"",
+            id, t.title
+        );
     } else {
-        println!("✓ 일정 삭제 완료 [ID: #{}]", id);
+        println!();
+        println!("{C_CLAUDE}⏺{C_RESET} {C_BOLD}Delete(#{id}){C_RESET}");
+        println!(
+            "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 일정 삭제 완료{C_RESET} {C_BOLD}[ID: #{}]{C_RESET}",
+            id
+        );
     }
     Ok(())
 }
@@ -931,11 +1463,12 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
         if json_output {
             println!("{}", serde_json::to_string_pretty(&cats)?);
         } else {
-            println!("카테고리 목록 ({}개):", cats.len());
+            println!();
+            println!("{C_CLAUDE}⏺{C_RESET} {C_BOLD}Categories({}개){C_RESET}", cats.len());
             for c in cats {
                 let cnt = counts.get(&c.id).copied().unwrap_or(0);
                 println!(
-                    "  [#{:<2}] {} (#{:06X}) - 미완료 {}개",
+                    "  {C_DIM}⎿{C_RESET}  [#{:<2}] {C_BLUE}{}{C_RESET} {C_DIM}(#{:06X}) · 미완료 {}개{C_RESET}",
                     c.id, c.name, c.color, cnt
                 );
             }
@@ -946,7 +1479,7 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
     match args[0].as_str() {
         "add" | "create" | "추가" => {
             if args.len() < 2 {
-                bail!("추가할 카테고리 이름을 입력해주세요. 예: openschedule categories add \"프로젝트\"");
+                bail!("추가할 카테고리 이름을 입력해주세요. 예: /cat add \"프로젝트\"");
             }
             let name = &args[1];
             let mut color: u32 = 0x0071E3;
@@ -977,7 +1510,11 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
                     }))?
                 );
             } else {
-                println!("✓ 카테고리 추가됨 [ID: #{}] \"{}\" (#{:06X})", id, name, color);
+                println!();
+                println!("{C_CLAUDE}⏺{C_RESET} {C_BOLD}AddCategory({name}){C_RESET}");
+                println!(
+                    "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 카테고리 추가됨{C_RESET} [ID: #{id}] \"{name}\" (#{color:06X})"
+                );
             }
         }
         "delete" | "rm" | "삭제" => {
@@ -986,11 +1523,35 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
             }
             let id: i64 = args[1].trim_start_matches('#').parse()?;
             store.delete_category(id)?;
-            println!("✓ 카테고리 삭제 완료 [ID: #{}]", id);
+            println!();
+            println!("{C_CLAUDE}⏺{C_RESET} {C_BOLD}DeleteCategory(#{id}){C_RESET}");
+            println!(
+                "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 카테고리 삭제 완료{C_RESET} [ID: #{id}]"
+            );
         }
         _ => bail!("알 수 없는 categories 하위 명령입니다: '{}'", args[0]),
     }
 
+    Ok(())
+}
+
+fn cmd_json_sync(store: &Store, _args: &[String]) -> Result<()> {
+    let synced = store.sync_all_json_files()?;
+    let files = store.list_json_schedule_files()?;
+    println!();
+    println!(
+        "{C_CLAUDE}⏺{C_RESET} {C_BOLD}Sync(SQLite ⇄ schedules/{{date}}_schedule.json){C_RESET}"
+    );
+    println!(
+        "  {C_DIM}⎿{C_RESET}  {C_GREEN}✓ 동기화 완료{C_RESET} ({synced}개 파일 병합됨, 총 {}개 일자별 JSON 파일)",
+        files.len()
+    );
+    for (date, path, count) in files {
+        println!(
+            "     • {C_WHITE}{date}_schedule.json{C_RESET} ({count}건) {C_DIM}-> {}{C_RESET}",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -1011,13 +1572,15 @@ fn cmd_summary(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else {
-        println!("📊 OpenSchedule 요약");
+        println!();
+        println!("{C_CLAUDE}⏺{C_RESET} {C_BOLD}Summary(OpenLab Schedule){C_RESET}");
         println!(
-            "  오늘(지연 포함): {}개 | 예정: {}개 | 전체 미완료: {}개 | 완료됨: {}개",
+            "  {C_DIM}⎿{C_RESET}  {C_BLUE}오늘(지연 포함): {}개{C_RESET} · {C_YELLOW}예정: {}개{C_RESET} · {C_WHITE}전체 미완료: {}개{C_RESET} · {C_GREEN}완료됨: {}개{C_RESET}",
             counts.today, counts.scheduled, counts.all, counts.completed
         );
-        println!("\n📌 오늘 및 지연된 일정:");
-        print!("{}", store.context_text(DateFilter::TodayAndOverdue, 50)?);
+        if !today_todos.is_empty() {
+            render_todo_box(store, &today_todos);
+        }
     }
     Ok(())
 }
