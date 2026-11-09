@@ -1,11 +1,26 @@
 //! OpenSchedule 독립 CLI 실행 파일 (`openschedule`).
-//! AI 에이전트 또는 터미널에서 직접 호출하여 일정을 추가/조회/완료/수정/삭제합니다.
+//! `openlab start -s` / `openlab start -s program` 및 CLI 하위 명령을 동일하게 지원합니다.
+
+use openschedule_core::cli::{parse_launch_action, run_cli, run_interactive_cli, LaunchAction};
+use openschedule_core::paths;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Err(e) = openschedule_core::cli::run_cli(&args) {
+    let res = match parse_launch_action(&args) {
+        LaunchAction::RunInteractiveCli => run_interactive_cli(),
+        LaunchAction::RunCliCommand(cmd_args) => run_cli(&cmd_args),
+        LaunchAction::RunGui => {
+            let gui_exe = paths::sibling_exe("openlab");
+            std::process::Command::new(gui_exe)
+                .args(["start", "-s", "program"])
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("GUI 실행 실패: {e}"))
+        }
+    };
+
+    if let Err(e) = res {
         eprintln!("오류: {e}");
         std::process::exit(1);
     }
 }
-

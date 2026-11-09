@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-10",
+  "updated_at": "2026-11-10T00:38:01.067186100+09:00",
+  "count": 1,
+  "todos": [
+    {
+      "id": 4,
+      "title": "SQLD 59회차 풀이",
+      "memo": "",
+      "category_id": 3,
+      "category_name": "공부",
+      "due_date": "2026-11-10",
+      "due_time": "18:00:00",
+      "status": "planned",
+      "condition_note": "",
+      "created_at": "2026-11-10T00:38:01.024203900+09:00",
+      "updated_at": "2026-11-10T00:38:01.024203900+09:00"
+    }
+  ]
+}

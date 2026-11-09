@@ -1,4 +1,7 @@
-//! OpenSchedule 순수 Rust 데스크톱 앱 & 상단 웹캠 핫존 오버레이 & CLI 진입점.
+//! OpenLab / OpenSchedule 메인 진입점 (`openlab.exe`, `openschedule-agent.exe`).
+//! - `openlab start -s`         : 대화형 CLI 일정 관리 프로그램 실행
+//! - `openlab start -s program` : GUI 데스크톱 프로그램 ([투두리스트 / 캘린더 뷰] + 상단 웹캠 핫존 오버레이) 실행
+//! - `openlab start -s <명령>`  : 단일 CLI 명령 실행 (AI 에이전트 및 스크립트 연동)
 
 mod hotzone;
 mod overlay_todo;
@@ -7,7 +10,10 @@ mod ui_main;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, ViewportBuilder, ViewportCommand, ViewportId};
-use openschedule_core::{theme, Settings, Store};
+use openschedule_core::{
+    cli::{parse_launch_action, LaunchAction},
+    theme, Settings, Store,
+};
 use tray_icon::{
     menu::{Menu, MenuItem},
     TrayIcon, TrayIconBuilder,
@@ -153,7 +159,7 @@ impl eframe::App for OpenScheduleApp {
                         egui::Frame::new()
                             .fill(theme::SURFACE)
                             .corner_radius(egui::CornerRadius::same(18))
-                            .stroke(egui::Stroke::new(1.5, theme::PRIMARY))
+                            .stroke(egui::Stroke::new(1.5_f32, theme::PRIMARY))
                             .inner_margin(egui::Margin::same(16)),
                     )
                     .show(vp_ctx, |ui| {
@@ -166,6 +172,7 @@ impl eframe::App for OpenScheduleApp {
 
             if focus_main {
                 self.overlay_visible = false;
+                self.main_view.force_refresh(&self.store);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(true));
                 ctx.send_viewport_cmd(ViewportCommand::Focus);
             }
@@ -181,7 +188,7 @@ fn setup_tray() -> (
     tray_icon::menu::MenuId,
 ) {
     let menu = Menu::new();
-    let open_item = MenuItem::new("OpenSchedule 열기", true, None);
+    let open_item = MenuItem::new("OpenLab Schedule 열기", true, None);
     let quit_item = MenuItem::new("종료", true, None);
 
     let open_id = open_item.id().clone();
@@ -194,7 +201,7 @@ fn setup_tray() -> (
     let tray = icon.and_then(|ic| {
         TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("OpenSchedule")
+            .with_tooltip("OpenLab Schedule")
             .with_icon(ic)
             .build()
             .ok()
@@ -214,18 +221,22 @@ fn load_tray_icon() -> Option<tray_icon::Icon> {
 fn main() -> anyhow::Result<()> {
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
-    // CLI 서브커맨드로 호출된 경우 즉시 실행 후 종료
-    if openschedule_core::cli::is_cli_invocation(&raw_args) {
-        return openschedule_core::cli::run_cli(&raw_args);
+    match parse_launch_action(&raw_args) {
+        LaunchAction::RunInteractiveCli => {
+            return openschedule_core::cli::run_interactive_cli();
+        }
+        LaunchAction::RunCliCommand(cmd_args) => {
+            return openschedule_core::cli::run_cli(&cmd_args);
+        }
+        LaunchAction::RunGui => {}
     }
 
     env_logger::init();
 
-    // api.rs 미사용 정리
     let viewport = ViewportBuilder::default()
-        .with_title("OpenSchedule - Apple Reminders")
-        .with_inner_size([1120.0, 740.0])
-        .with_min_inner_size([860.0, 540.0]);
+        .with_title("OpenLab Schedule - 투두리스트 & 캘린더")
+        .with_inner_size([1160.0, 750.0])
+        .with_min_inner_size([880.0, 560.0]);
 
     let options = eframe::NativeOptions {
         viewport,
@@ -233,7 +244,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     eframe::run_native(
-        "OpenSchedule",
+        "OpenLab Schedule",
         options,
         Box::new(move |cc| Ok(Box::new(OpenScheduleApp::new(cc)))),
     )

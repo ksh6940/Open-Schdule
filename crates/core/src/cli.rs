@@ -1,6 +1,9 @@
-//! OpenSchedule CLI 모듈.
-//! 외부 AI 에이전트(Claude Code, Antigravity, Cursor 등) 및 터미널 사용자가
-//! 명령줄에서 일정을 추가/조회/수정/상태변경/삭제할 수 있도록 지원합니다.
+//! OpenSchedule / OpenLab CLI 모듈.
+//! - `openlab start -s` : 대화형 CLI 모드 실행 (또는 뒤에 하위 명령 전달 시 즉시 실행)
+//! - `openlab start -s program` : GUI 데스크톱 프로그램 실행
+//! - 일자별 `{date}_schedule.json` 로컬 저장 및 SQLite(`rusqlite`) 연동 관리
+
+use std::io::{self, Write};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{Duration, Local, NaiveDate, NaiveTime};
@@ -8,8 +11,97 @@ use serde_json::json;
 
 use crate::{
     model::{Status, TodoDraft},
-    DateFilter, Store, TodoQuery,
+    paths, DateFilter, Store, TodoQuery,
 };
+
+/// 실행 모드 판별 결과
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchAction {
+    /// GUI 프로그램 실행 (`openlab start -s program` 또는 인자 없음)
+    RunGui,
+    /// 대화형 CLI 셸 실행 (`openlab start -s`)
+    RunInteractiveCli,
+    /// 단일 CLI 명령 실행 (`openlab start -s add ...` 또는 `openlab add ...`)
+    RunCliCommand(Vec<String>),
+}
+
+/// 커맨드라인 인자를 분석하여 GUI 실행 / 대화형 CLI 실행 / 단일 CLI 명령 실행을 판별합니다.
+pub fn parse_launch_action(raw_args: &[String]) -> LaunchAction {
+    if raw_args.is_empty() {
+        return LaunchAction::RunGui;
+    }
+
+    // `openlab start -s ...` 패턴 처리
+    if raw_args[0].eq_ignore_ascii_case("start") {
+        let rest = &raw_args[1..];
+        if rest.is_empty() {
+            return LaunchAction::RunInteractiveCli;
+        }
+        if rest[0] == "-s" || rest[0] == "--schedule" {
+            let after_s = &rest[1..];
+            if after_s.is_empty() {
+                // `openlab start -s` -> CLI 실행!
+                return LaunchAction::RunInteractiveCli;
+            }
+            if after_s.len() == 1
+                && matches!(
+                    after_s[0].to_lowercase().as_str(),
+                    "program" | "gui" | "app" | "window"
+                )
+            {
+                // `openlab start -s program` -> GUI 프로그램 실행!
+                return LaunchAction::RunGui;
+            }
+            // `openlab start -s add ...` 등 하위 명령 실행
+            return LaunchAction::RunCliCommand(after_s.to_vec());
+        }
+        if rest.len() == 1
+            && matches!(
+                rest[0].to_lowercase().as_str(),
+                "program" | "gui" | "app"
+            )
+        {
+            return LaunchAction::RunGui;
+        }
+        return LaunchAction::RunCliCommand(rest.to_vec());
+    }
+
+    // `openlab -s` 또는 `openlab -s program`
+    if raw_args[0] == "-s" {
+        let after_s = &raw_args[1..];
+        if after_s.is_empty() {
+            return LaunchAction::RunInteractiveCli;
+        }
+        if after_s.len() == 1 && after_s[0].eq_ignore_ascii_case("program") {
+            return LaunchAction::RunGui;
+        }
+        return LaunchAction::RunCliCommand(after_s.to_vec());
+    }
+
+    if raw_args.len() == 1
+        && matches!(
+            raw_args[0].to_lowercase().as_str(),
+            "cli" | "interactive" | "shell"
+        )
+    {
+        return LaunchAction::RunInteractiveCli;
+    }
+
+    if raw_args.len() == 1
+        && matches!(
+            raw_args[0].to_lowercase().as_str(),
+            "program" | "gui" | "app"
+        )
+    {
+        return LaunchAction::RunGui;
+    }
+
+    if is_cli_invocation(raw_args) {
+        return LaunchAction::RunCliCommand(raw_args.to_vec());
+    }
+
+    LaunchAction::RunCliCommand(raw_args.to_vec())
+}
 
 /// CLI 서브커맨드인지 판별합니다.
 pub fn is_cli_invocation(args: &[String]) -> bool {
@@ -19,7 +111,10 @@ pub fn is_cli_invocation(args: &[String]) -> bool {
     let first = args[0].as_str();
     matches!(
         first,
-        "add"
+        "start"
+            | "-s"
+            | "cli"
+            | "add"
             | "create"
             | "new"
             | "추가"
@@ -46,6 +141,10 @@ pub fn is_cli_invocation(args: &[String]) -> bool {
             | "cats"
             | "category"
             | "카테고리"
+            | "json"
+            | "sync"
+            | "load"
+            | "동기화"
             | "summary"
             | "counts"
             | "요약"
@@ -57,67 +156,365 @@ pub fn is_cli_invocation(args: &[String]) -> bool {
     )
 }
 
+/// 대화형 CLI 모드 (`openlab start -s`) 실행
+pub fn run_interactive_cli() -> Result<()> {
+    let store = Store::open_default()?;
+    let _ = store.sync_all_json_files();
+
+    println!("======================================================================");
+    println!("  🚀 OpenLab Schedule CLI (SQLite + {{date}}_schedule.json 연동)");
+    println!("  📂 JSON 저장 경로: {}", paths::schedules_dir().display());
+    println!("  🗄️ SQLite DB 경로: {}", paths::db_path().display());
+    println!("======================================================================");
+    println!("  [명령어 또는 번호를 입력하세요]");
+    println!("   1 (또는 add)      : 새 할 일 추가 ({{date}}_schedule.json 자동 저장)");
+    println!("   2 (또는 date)     : 일자별 할 일 조회 및 JSON 확인");
+    println!("   3 (또는 list)     : 전체 / 오늘 / 예정 할 일 목록 조회");
+    println!("   4 (또는 edit)     : 할 일 수정 (제목, 날짜, 시간, 카테고리, 메모)");
+    println!("   5 (또는 status)   : 할 일 상태 변경 / 완료 처리");
+    println!("   6 (또는 delete)   : 할 일 삭제");
+    println!("   7 (또는 json)     : 저장된 {{date}}_schedule.json 파일 목록 & 동기화");
+    println!("   help              : 전체 CLI 명령어 도움말 보기");
+    println!("   0 (또는 exit, q)  : CLI 종료");
+    println!("----------------------------------------------------------------------");
+    println!("  💡 팁: 프롬프트에서 바로 `add \"팀 회의\" -d 내일 -t 14:00 -c 업무` 처럼");
+    println!("         일반 CLI 명령어를 직접 입력하셔도 됩니다.");
+    println!("======================================================================");
+
+    let stdin = io::stdin();
+    loop {
+        print!("\nopenlab> ");
+        io::stdout().flush()?;
+
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+
+        match input.to_lowercase().as_str() {
+            "0" | "exit" | "quit" | "q" | "종료" => {
+                println!("OpenLab CLI를 종료합니다.");
+                break;
+            }
+            "1" => {
+                if let Err(e) = interactive_add(&store) {
+                    eprintln!("오류: {e}");
+                }
+            }
+            "2" | "date" => {
+                if let Err(e) = interactive_date_view(&store) {
+                    eprintln!("오류: {e}");
+                }
+            }
+            "3" => {
+                let _ = cmd_list(&store, &[]);
+            }
+            "4" => {
+                if let Err(e) = interactive_edit(&store) {
+                    eprintln!("오류: {e}");
+                }
+            }
+            "5" => {
+                if let Err(e) = interactive_status(&store) {
+                    eprintln!("오류: {e}");
+                }
+            }
+            "6" => {
+                if let Err(e) = interactive_delete(&store) {
+                    eprintln!("오류: {e}");
+                }
+            }
+            "7" => {
+                let _ = cmd_json(&store, &[]);
+            }
+            _ => {
+                let tokens = split_shell_words(input);
+                if !tokens.is_empty() {
+                    if let Err(e) = run_cli_with_store(&store, &tokens) {
+                        eprintln!("오류: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn prompt_line(label: &str) -> Result<String> {
+    print!("{label}");
+    io::stdout().flush()?;
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf)?;
+    Ok(buf.trim().to_string())
+}
+
+fn interactive_add(store: &Store) -> Result<()> {
+    let today = Local::now().date_naive();
+    let title = prompt_line("  • 할 일 제목: ")?;
+    if title.is_empty() {
+        bail!("제목은 비워둘 수 없습니다.");
+    }
+    let date_in = prompt_line(&format!(
+        "  • 날짜 (기본값: {} / 오늘, 내일, YYYY-MM-DD): ",
+        today.format("%Y-%m-%d")
+    ))?;
+    let due_date = if date_in.is_empty() {
+        today
+    } else {
+        parse_flexible_date(&date_in)?
+    };
+
+    let time_in = prompt_line("  • 시간 (선택, 예: 14:00, 오후 3시, Enter 생략): ")?;
+    let due_time = if time_in.is_empty() {
+        None
+    } else {
+        parse_flexible_time(&time_in)?
+    };
+
+    let cat_in = prompt_line("  • 카테고리 (선택, 예: 업무, 개인, 공부, 건강, Enter 미분류): ")?;
+    let category_id = resolve_category(store, &cat_in, true)?;
+
+    let memo = prompt_line("  • 메모 (선택, Enter 생략): ")?;
+
+    let draft = TodoDraft {
+        title,
+        memo,
+        category_id,
+        due_date,
+        due_time,
+        status: Status::Planned,
+        condition_note: String::new(),
+    };
+
+    let id = store.add(&draft)?;
+    let json_path = paths::date_schedule_json_path(due_date);
+    println!(
+        "✓ 할 일 등록 완료 [ID: #{}] \"{}\" (날짜: {})",
+        id,
+        draft.title,
+        due_date.format("%Y-%m-%d")
+    );
+    println!("  📄 JSON 저장됨: {}", json_path.display());
+    Ok(())
+}
+
+fn interactive_date_view(store: &Store) -> Result<()> {
+    let today = Local::now().date_naive();
+    let date_in = prompt_line(&format!(
+        "  • 조회할 날짜 입력 (기본값: {} / 오늘, 내일, YYYY-MM-DD): ",
+        today.format("%Y-%m-%d")
+    ))?;
+    let date = if date_in.is_empty() {
+        today
+    } else {
+        parse_flexible_date(&date_in)?
+    };
+
+    let json_path = paths::date_schedule_json_path(date);
+    if json_path.exists() {
+        let _ = store.import_date_json_file(&json_path);
+    }
+    println!(
+        "\n📅 [{}] 할 일 목록 (파일: {}_schedule.json):",
+        date.format("%Y-%m-%d"),
+        date.format("%Y-%m-%d")
+    );
+    cmd_list(store, &["--date".to_string(), date.format("%Y-%m-%d").to_string()])
+}
+
+fn interactive_edit(store: &Store) -> Result<()> {
+    cmd_list(store, &[])?;
+    let id_str = prompt_line("\n  • 수정할 할 일 ID 번호: ")?;
+    let id: i64 = id_str.trim_start_matches('#').parse()?;
+    let existing = store
+        .get(id)?
+        .ok_or_else(|| anyhow!("ID #{id} 일정을 찾을 수 없습니다."))?;
+
+    let mut draft = existing.to_draft();
+    println!("  (변경하지 않으려면 Enter를 누르세요)");
+
+    let new_title = prompt_line(&format!("  • 새 제목 [현재: {}]: ", draft.title))?;
+    if !new_title.is_empty() {
+        draft.title = new_title;
+    }
+
+    let new_date = prompt_line(&format!(
+        "  • 새 날짜 [현재: {}]: ",
+        draft.due_date.format("%Y-%m-%d")
+    ))?;
+    if !new_date.is_empty() {
+        draft.due_date = parse_flexible_date(&new_date)?;
+    }
+
+    let cur_time = draft
+        .due_time
+        .map(|t| t.format("%H:%M").to_string())
+        .unwrap_or_else(|| "없음".into());
+    let new_time = prompt_line(&format!("  • 새 시간 [현재: {cur_time}, 삭제는 none]: "))?;
+    if !new_time.is_empty() {
+        draft.due_time = parse_flexible_time(&new_time)?;
+    }
+
+    let new_memo = prompt_line(&format!("  • 새 메모 [현재: {}]: ", draft.memo))?;
+    if !new_memo.is_empty() {
+        draft.memo = new_memo;
+    }
+
+    store.update(id, &draft)?;
+    let json_path = paths::date_schedule_json_path(draft.due_date);
+    println!("✓ 일정 수정 완료 [ID: #{id}]");
+    println!("  📄 JSON 갱신됨: {}", json_path.display());
+    Ok(())
+}
+
+fn interactive_status(store: &Store) -> Result<()> {
+    cmd_list(store, &[])?;
+    let id_str = prompt_line("\n  • 상태를 변경할 할 일 ID 번호: ")?;
+    let id: i64 = id_str.trim_start_matches('#').parse()?;
+    let st_str = prompt_line(
+        "  • 변경할 상태 (1: 진행예정, 2: 진행중, 3: 완료, 4: 조건부완료) [기본 3 완료]: ",
+    )?;
+    let status = match st_str.as_str() {
+        "1" => Status::Planned,
+        "2" => Status::InProgress,
+        "" | "3" => Status::Done,
+        "4" => Status::ConditionalDone,
+        other => Status::parse_loose(other)
+            .ok_or_else(|| anyhow!("알 수 없는 상태입니다: {other}"))?,
+    };
+    let mut cond = String::new();
+    if status == Status::ConditionalDone {
+        cond = prompt_line("  • 조건부완료 사유: ")?;
+    }
+
+    let existing = store
+        .get(id)?
+        .ok_or_else(|| anyhow!("ID #{id} 일정을 찾을 수 없습니다."))?;
+    let mut draft = existing.to_draft();
+    draft.status = status;
+    if !cond.is_empty() {
+        draft.condition_note = cond;
+    }
+    store.update(id, &draft)?;
+    println!(
+        "✓ 상태 변경 완료 [ID: #{id}] -> {}",
+        status.label()
+    );
+    Ok(())
+}
+
+fn interactive_delete(store: &Store) -> Result<()> {
+    cmd_list(store, &[])?;
+    let id_str = prompt_line("\n  • 삭제할 할 일 ID 번호: ")?;
+    let id: i64 = id_str.trim_start_matches('#').parse()?;
+    cmd_delete(store, &[id.to_string()])
+}
+
+fn split_shell_words(input: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = '"';
+
+    for ch in input.chars() {
+        if in_quotes {
+            if ch == quote_char {
+                in_quotes = false;
+            } else {
+                current.push(ch);
+            }
+        } else if ch == '"' || ch == '\'' {
+            in_quotes = true;
+            quote_char = ch;
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
 pub fn run_cli(args: &[String]) -> Result<()> {
+    let store = Store::open_default()?;
+    let _ = store.sync_all_json_files();
+    run_cli_with_store(&store, args)
+}
+
+pub fn run_cli_with_store(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h") {
         print_help();
         return Ok(());
     }
 
     if matches!(args[0].as_str(), "--version" | "-V") {
-        println!("openschedule {}", env!("CARGO_PKG_VERSION"));
+        println!("openlab / openschedule {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
-    let store = Store::open_default()?;
     let cmd = args[0].as_str();
     let rest = &args[1..];
 
     match cmd {
-        "add" | "create" | "new" | "추가" | "등록" => cmd_add(&store, rest),
-        "list" | "ls" | "목록" | "조회" => cmd_list(&store, rest),
-        "get" | "show" => cmd_get(&store, rest),
-        "done" | "complete" | "완료" => cmd_done(&store, rest),
-        "status" | "상태" => cmd_status(&store, rest),
-        "update" | "edit" | "수정" => cmd_update(&store, rest),
-        "delete" | "rm" | "remove" | "삭제" => cmd_delete(&store, rest),
-        "categories" | "cats" | "category" | "카테고리" => cmd_categories(&store, rest),
-        "summary" | "counts" | "요약" => cmd_summary(&store, rest),
+        "add" | "create" | "new" | "추가" | "등록" => cmd_add(store, rest),
+        "list" | "ls" | "목록" | "조회" => cmd_list(store, rest),
+        "get" | "show" => cmd_get(store, rest),
+        "done" | "complete" | "완료" => cmd_done(store, rest),
+        "status" | "상태" => cmd_status(store, rest),
+        "update" | "edit" | "수정" => cmd_update(store, rest),
+        "delete" | "rm" | "remove" | "삭제" => cmd_delete(store, rest),
+        "categories" | "cats" | "category" | "카테고리" => cmd_categories(store, rest),
+        "json" | "sync" | "load" | "동기화" => cmd_json(store, rest),
+        "summary" | "counts" | "요약" => cmd_summary(store, rest),
         other => {
-            bail!("알 수 없는 명령어입니다: '{other}'\n사용법을 보려면 `openschedule --help`를 실행하세요.");
+            bail!("알 수 없는 명령어입니다: '{other}'\n사용법을 보려면 `openlab start -s help`를 실행하세요.");
         }
     }
 }
 
 pub fn print_help() {
     println!(
-        r##"OpenSchedule CLI - 일정 관리 명령줄 도구 (AI 에이전트 & 터미널 연동)
+        r##"OpenLab / OpenSchedule CLI - 일정 관리 명령줄 도구 (SQLite + {{date}}_schedule.json)
 
-사용법:
-  openschedule <COMMAND> [OPTIONS]
+실행 방법:
+  openlab start -s                     대화형 CLI 일정 관리 프로그램 실행
+  openlab start -s program             GUI 데스크톱 프로그램(캘린더 뷰 / 투두리스트) 실행
+  openlab start -s <COMMAND> [OPTIONS] 단일 CLI 명령 즉시 실행 (AI 에이전트 연동)
 
 명령어 (Commands):
-  add, 추가       새 일정 추가
-                  예: openschedule add "팀 주간 회의" --date tomorrow --time 14:00 --category 업무 --memo "분기 목표 점검"
-                  예: openschedule add "운동하기" -d 오늘 -t 19:00 -c 건강
+  add, 추가       새 일정 추가 (자동으로 schedules/{{date}}_schedule.json 생성/갱신)
+                  예: openlab start -s add "팀 주간 회의" --date tomorrow --time 14:00 --category 업무 --memo "분기 목표 점검"
+                  예: openlab add "운동하기" -d 오늘 -t 19:00 -c 건강
   list, 조회      일정 목록 조회
-                  예: openschedule list                          (전체 조회)
-                  예: openschedule list --filter today           (오늘 일정)
-                  예: openschedule list --filter scheduled       (예정 일정)
-                  예: openschedule list --category 업무 --json   (JSON 포맷 출력)
+                  예: openlab start -s list                          (전체 조회)
+                  예: openlab start -s list --filter today           (오늘 일정)
+                  예: openlab start -s list --date 2026-11-10        (특정 일자 조회)
+                  예: openlab start -s list --json                   (JSON 포맷 출력)
   done, 완료      일정을 완료(또는 조건부완료) 처리
-                  예: openschedule done 1
-                  예: openschedule done 2 --condition "검토 대기"
+                  예: openlab start -s done 1
   status, 상태    일정 상태 변경 (planned | in_progress | conditional_done | done)
-                  예: openschedule status 1 in_progress
+                  예: openlab start -s status 1 in_progress
   update, 수정    일정 상세 정보 수정
-                  예: openschedule update 1 --title "수정된 제목" --date 2026-11-15 --time 10:30
+                  예: openlab start -s update 1 --title "수정된 제목" --date 2026-11-15 --time 10:30
   delete, 삭제    일정 삭제
-                  예: openschedule delete 1
+                  예: openlab start -s delete 1
+  json, sync      로컬 {{date}}_schedule.json 파일 목록 조회 및 SQLite DB 양방향 동기화
+                  예: openlab start -s json
   categories      카테고리(목록) 조회 / 추가 / 삭제
-                  예: openschedule categories
-                  예: openschedule categories add "프로젝트" --color "#AF52DE"
+                  예: openlab start -s categories
+                  예: openlab start -s categories add "프로젝트" --color "#AF52DE"
   summary, 요약   스마트 카운트 및 오늘의 일정 요약 출력
-                  예: openschedule summary [--json]
+                  예: openlab start -s summary [--json]
 
 공통 옵션:
   -d, --date <DATE>        날짜: YYYY-MM-DD, MM-DD, today(오늘), tomorrow(내일), 모레, next-week(다음주), +3d
@@ -144,7 +541,6 @@ pub fn parse_flexible_date(input: &str) -> Result<NaiveDate> {
         _ => {}
     }
 
-    // +Nd 또는 +Nw 형식 (예: +3d, +2w)
     if let Some(rest) = s.strip_prefix('+') {
         if let Some(days_str) = rest.strip_suffix('d').or_else(|| rest.strip_suffix("일")) {
             if let Ok(d) = days_str.trim().parse::<i64>() {
@@ -158,13 +554,11 @@ pub fn parse_flexible_date(input: &str) -> Result<NaiveDate> {
         }
     }
 
-    // YYYY-MM-DD 또는 YYYY/MM/DD 또는 YYYY.MM.DD
     let normalized = s.replace(['/', '.'], "-");
     if let Ok(d) = NaiveDate::parse_from_str(&normalized, "%Y-%m-%d") {
         return Ok(d);
     }
 
-    // MM-DD 형식 (올해 기준)
     let parts: Vec<&str> = normalized.split('-').collect();
     if parts.len() == 2 {
         if let (Ok(m), Ok(d)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
@@ -192,7 +586,6 @@ pub fn parse_flexible_time(input: &str) -> Result<Option<NaiveTime>> {
         return Ok(Some(t));
     }
 
-    // "오후 3시 30분", "오전 9시", "15시" 등 처리
     let is_pm = s.contains("오후") || s.contains("pm");
     let is_am = s.contains("오전") || s.contains("am");
     let cleaned = s
@@ -223,7 +616,6 @@ pub fn parse_flexible_time(input: &str) -> Result<Option<NaiveTime>> {
         }
     }
 
-    // 단순 숫자 시간 (예: "15" -> 15:00)
     if let Ok(mut hour) = cleaned.parse::<u32>() {
         if is_pm && hour < 12 {
             hour += 12;
@@ -238,7 +630,12 @@ pub fn parse_flexible_time(input: &str) -> Result<Option<NaiveTime>> {
 
 fn resolve_category(store: &Store, input: &str, create_if_missing: bool) -> Result<Option<i64>> {
     let trimmed = input.trim();
-    if trimmed.is_empty() || matches!(trimmed.to_lowercase().as_str(), "none" | "null" | "미분류" | "없음") {
+    if trimmed.is_empty()
+        || matches!(
+            trimmed.to_lowercase().as_str(),
+            "none" | "null" | "미분류" | "없음"
+        )
+    {
         return Ok(None);
     }
     if let Ok(id) = trimmed.parse::<i64>() {
@@ -328,7 +725,7 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
 
     let title = title_parts.join(" ").trim().to_string();
     if title.is_empty() {
-        bail!("일정 제목을 입력해주세요.\n예: openschedule add \"팀 회의\" --date tomorrow --time 14:00 --category 업무");
+        bail!("일정 제목을 입력해주세요.\n예: openlab start -s add \"팀 회의\" --date tomorrow --time 14:00 --category 업무");
     }
 
     let category_id = match category_arg {
@@ -354,6 +751,7 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
     let todo = store
         .get(id)?
         .ok_or_else(|| anyhow!("생성된 일정을 불러오지 못했습니다."))?;
+    let json_path = paths::date_schedule_json_path(due_date);
 
     let cats = store.categories()?;
     let cat_name = todo
@@ -369,6 +767,7 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
                 "action": "added",
                 "todo": todo,
                 "category_name": cat_name,
+                "json_file": json_path.to_string_lossy(),
             }))?
         );
     } else {
@@ -385,6 +784,7 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
             cat_name,
             todo.status.label()
         );
+        println!("  📄 JSON 저장됨: {}", json_path.display());
     }
 
     Ok(())
@@ -450,7 +850,6 @@ fn cmd_list(store: &Store, args: &[String]) -> Result<()> {
                 json_output = true;
             }
             positional if !positional.starts_with('-') => {
-                // 예: `openschedule list today` 지원
                 filter = match positional.to_lowercase().as_str() {
                     "today" | "오늘" => DateFilter::TodayAndOverdue,
                     "scheduled" | "예정" => DateFilter::Scheduled,
@@ -522,29 +921,22 @@ fn cmd_list(store: &Store, args: &[String]) -> Result<()> {
 
 fn cmd_get(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("조회할 일정 ID를 입력해주세요. 예: openschedule get 1");
+        bail!("조회할 일정 ID를 입력해주세요. 예: openlab start -s get 1");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
         .parse()
         .map_err(|_| anyhow!("올바른 일정 ID가 아닙니다: '{}'", args[0]))?;
-    let json_output = args.iter().any(|a| a == "--json");
-
     let todo = store
         .get(id)?
         .ok_or_else(|| anyhow!("ID #{id} 일정을 찾을 수 없습니다."))?;
-
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&todo)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&todo)?);
-    }
+    println!("{}", serde_json::to_string_pretty(&todo)?);
     Ok(())
 }
 
 fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("완료 처리할 일정 ID를 입력해주세요. 예: openschedule done 1");
+        bail!("완료 처리할 일정 ID를 입력해주세요. 예: openlab start -s done 1");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -584,6 +976,7 @@ fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
 
     store.update(id, &draft)?;
     let updated = store.get(id)?.unwrap();
+    let json_path = paths::date_schedule_json_path(updated.due_date);
 
     if json_output {
         println!(
@@ -592,6 +985,7 @@ fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
                 "ok": true,
                 "action": "completed",
                 "todo": updated,
+                "json_file": json_path.to_string_lossy(),
             }))?
         );
     } else {
@@ -601,13 +995,14 @@ fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
             updated.title,
             updated.status.label()
         );
+        println!("  📄 JSON 갱신됨: {}", json_path.display());
     }
     Ok(())
 }
 
 fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
     if args.len() < 2 {
-        bail!("사용법: openschedule status <ID> <STATUS> [--condition <메모>]\n상태값: planned(진행예정), in_progress(진행중), conditional_done(조건부완료), done(완료)");
+        bail!("사용법: openlab start -s status <ID> <STATUS> [--condition <메모>]\n상태값: planned(진행예정), in_progress(진행중), conditional_done(조건부완료), done(완료)");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -646,6 +1041,7 @@ fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
 
     store.update(id, &draft)?;
     let updated = store.get(id)?.unwrap();
+    let json_path = paths::date_schedule_json_path(updated.due_date);
 
     if json_output {
         println!(
@@ -654,6 +1050,7 @@ fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
                 "ok": true,
                 "action": "status_updated",
                 "todo": updated,
+                "json_file": json_path.to_string_lossy(),
             }))?
         );
     } else {
@@ -663,13 +1060,14 @@ fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
             updated.title,
             updated.status.label()
         );
+        println!("  📄 JSON 갱신됨: {}", json_path.display());
     }
     Ok(())
 }
 
 fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("수정할 일정 ID를 입력해주세요. 예: openschedule update 1 --title \"새 제목\" --date tomorrow");
+        bail!("수정할 일정 ID를 입력해주세요. 예: openlab start -s update 1 --title \"새 제목\" --date tomorrow");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -743,6 +1141,7 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
 
     store.update(id, &draft)?;
     let updated = store.get(id)?.unwrap();
+    let json_path = paths::date_schedule_json_path(updated.due_date);
 
     if json_output {
         println!(
@@ -751,6 +1150,7 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
                 "ok": true,
                 "action": "updated",
                 "todo": updated,
+                "json_file": json_path.to_string_lossy(),
             }))?
         );
     } else {
@@ -760,13 +1160,14 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
             updated.title,
             updated.due_date.format("%Y-%m-%d")
         );
+        println!("  📄 JSON 갱신됨: {}", json_path.display());
     }
     Ok(())
 }
 
 fn cmd_delete(store: &Store, args: &[String]) -> Result<()> {
     if args.is_empty() {
-        bail!("삭제할 일정 ID를 입력해주세요. 예: openschedule delete 1");
+        bail!("삭제할 일정 ID를 입력해주세요. 예: openlab start -s delete 1");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
@@ -788,9 +1189,51 @@ fn cmd_delete(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else if let Some(t) = existing {
-        println!("✓ 일정 삭제 완료 [ID: #{}] \"{}\"", id, t.title);
+        println!(
+            "✓ 일정 삭제 완료 [ID: #{}] \"{}\" (날짜: {}_schedule.json 반영됨)",
+            id,
+            t.title,
+            t.due_date.format("%Y-%m-%d")
+        );
     } else {
         println!("✓ 일정 삭제 완료 [ID: #{}]", id);
+    }
+    Ok(())
+}
+
+fn cmd_json(store: &Store, args: &[String]) -> Result<()> {
+    let json_output = args.iter().any(|a| a == "--json");
+    let _ = store.sync_all_json_files();
+    let files = store.list_json_schedule_files()?;
+
+    if json_output {
+        let items: Vec<_> = files
+            .iter()
+            .map(|(date, path, count)| {
+                json!({
+                    "date": date,
+                    "file": format!("{date}_schedule.json"),
+                    "path": path.to_string_lossy(),
+                    "count": count,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
+
+    println!("📂 일자별 JSON 저장 폴더: {}", paths::schedules_dir().display());
+    if files.is_empty() {
+        println!("  (저장된 {{date}}_schedule.json 파일이 없습니다)");
+    } else {
+        for (date, path, count) in files {
+            println!(
+                "  • {}_schedule.json ({}건) -> {}",
+                date,
+                count,
+                path.display()
+            );
+        }
     }
     Ok(())
 }
@@ -807,7 +1250,10 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
             println!("카테고리 목록 ({}개):", cats.len());
             for c in cats {
                 let cnt = counts.get(&c.id).copied().unwrap_or(0);
-                println!("  [#{:<2}] {} (#{:06X}) - 미완료 {}개", c.id, c.name, c.color, cnt);
+                println!(
+                    "  [#{:<2}] {} (#{:06X}) - 미완료 {}개",
+                    c.id, c.name, c.color, cnt
+                );
             }
         }
         return Ok(());
@@ -816,7 +1262,7 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
     match args[0].as_str() {
         "add" | "create" | "추가" => {
             if args.len() < 2 {
-                bail!("추가할 카테고리 이름을 입력해주세요. 예: openschedule categories add \"프로젝트\"");
+                bail!("추가할 카테고리 이름을 입력해주세요. 예: openlab start -s categories add \"프로젝트\"");
             }
             let name = &args[1];
             let mut color: u32 = 0x0071E3;
@@ -826,7 +1272,8 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
                     "--color" | "-c" => {
                         i += 1;
                         if i < args.len() {
-                            let hex_str = args[i].trim_start_matches('#').trim_start_matches("0x");
+                            let hex_str =
+                                args[i].trim_start_matches('#').trim_start_matches("0x");
                             color = u32::from_str_radix(hex_str, 16).unwrap_or(0x0071E3);
                         }
                     }
@@ -847,7 +1294,10 @@ fn cmd_categories(store: &Store, args: &[String]) -> Result<()> {
                     }))?
                 );
             } else {
-                println!("✓ 카테고리 추가됨 [ID: #{}] \"{}\" (#{:06X})", id, name, color);
+                println!(
+                    "✓ 카테고리 추가됨 [ID: #{}] \"{}\" (#{:06X})",
+                    id, name, color
+                );
             }
         }
         "delete" | "rm" | "삭제" => {
@@ -881,7 +1331,7 @@ fn cmd_summary(store: &Store, args: &[String]) -> Result<()> {
             }))?
         );
     } else {
-        println!("📊 OpenSchedule 요약");
+        println!("📊 OpenLab / OpenSchedule 요약");
         println!(
             "  오늘(지연 포함): {}개 | 예정: {}개 | 전체 미완료: {}개 | 완료됨: {}개",
             counts.today, counts.scheduled, counts.all, counts.completed
@@ -891,4 +1341,3 @@ fn cmd_summary(store: &Store, args: &[String]) -> Result<()> {
     }
     Ok(())
 }
-
