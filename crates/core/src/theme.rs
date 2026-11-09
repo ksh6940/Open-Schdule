@@ -8,6 +8,7 @@ use crate::model::Status;
 
 /// Phosphor Icons (Bold) 유니코드 글리프 상수
 pub mod icons {
+    pub const ARROWS_CLOCKWISE: &str = "\u{e094}";
     pub const ARROW_SQUARE_OUT: &str = "\u{e5de}";
     pub const CALENDAR: &str = "\u{e108}";
     pub const CALENDAR_BLANK: &str = "\u{e10a}";
@@ -34,8 +35,11 @@ pub mod icons {
     pub const X: &str = "\u{e4f6}";
 }
 
-// ── Apple Color Palette (Light Mode) ──
-/// Canvas (Fog Canvas) `#f5f5f7`
+// ── Apple Design System Color Tokens ──
+/// Brand / Dark Canvas `#000000`
+pub const BRAND: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+pub const CANVAS_DARK: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+/// Fog Canvas `#f5f5f7`
 pub const CANVAS: Color32 = Color32::from_rgb(0xF5, 0xF5, 0xF7);
 /// Pure white surface `#ffffff` (HIG card surface)
 pub const SURFACE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
@@ -47,6 +51,8 @@ pub const BORDER: Color32 = Color32::from_rgb(0xE0, 0xE0, 0xE4);
 pub const BORDER_STRONG: Color32 = Color32::from_rgb(0xD1, 0xD1, 0xD6);
 /// Principal text `#1d1d1f`
 pub const FOREGROUND: Color32 = Color32::from_rgb(0x1D, 0x1D, 0x1F);
+/// Text on primary filled actions `#ffffff`
+pub const ON_PRIMARY: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
 /// Muted text `#6e6e73`
 pub const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6E, 0x73);
 /// Secondary neutral `#515154`
@@ -55,8 +61,12 @@ pub const SECONDARY: Color32 = Color32::from_rgb(0x51, 0x51, 0x54);
 pub const PRIMARY: Color32 = Color32::from_rgb(0x00, 0x71, 0xE3);
 /// Apple Primary Action Hover `#0076df`
 pub const PRIMARY_HOVER: Color32 = Color32::from_rgb(0x00, 0x76, 0xDF);
-/// Apple Text Link Blue `#0066cc`
+/// Apple Primary Action Pressed `#006edb`
+pub const PRIMARY_PRESSED: Color32 = Color32::from_rgb(0x00, 0x6E, 0xDB);
+/// Apple Text Link & Outline Action Blue `#0066cc`
 pub const LINK: Color32 = Color32::from_rgb(0x00, 0x66, 0xCC);
+/// Apple Link on Dark `#2997ff`
+pub const LINK_ON_DARK: Color32 = Color32::from_rgb(0x29, 0x97, 0xFF);
 /// Danger / Destructive Red `#ff3b30`
 pub const DANGER: Color32 = Color32::from_rgb(0xFF, 0x3B, 0x30);
 /// Success Green `#34c759`
@@ -65,6 +75,25 @@ pub const SUCCESS: Color32 = Color32::from_rgb(0x34, 0xC7, 0x59);
 pub const WARNING: Color32 = Color32::from_rgb(0xFF, 0x95, 0x00);
 /// Conditional / Purple `#af52de`
 pub const PURPLE: Color32 = Color32::from_rgb(0xAF, 0x52, 0xDE);
+
+// ── Apple Typography Scale (SF Pro Display / SF Pro Text) ──
+pub const TYPO_DISPLAY_HERO: f32 = 56.0;
+pub const TYPO_SECTION: f32 = 40.0;
+pub const TYPO_TILE_HEADING: f32 = 28.0;
+pub const TYPO_BODY: f32 = 17.0;
+pub const TYPO_BODY_SMALL: f32 = 14.0;
+pub const TYPO_CAPTION: f32 = 12.0;
+
+// ── Apple Rounded & Spacing Tokens ──
+pub const ROUNDED_CONTROL: u8 = 8;
+pub const ROUNDED_DOCS_CARD: u8 = 18;
+pub const ROUNDED_MARKETING_PILL: u8 = 255;
+
+pub const SPACING_COMPACT: f32 = 8.0;
+pub const SPACING_CONTROL_INLINE: f32 = 15.0;
+pub const SPACING_PILL_BLOCK: f32 = 11.0;
+pub const SPACING_PILL_INLINE: f32 = 21.0;
+pub const SPACING_CONTENT: f32 = 20.0;
 
 // 하위 호환 상수 매핑
 pub const BG: Color32 = CANVAS;
@@ -152,12 +181,14 @@ pub fn install(ctx: &egui::Context) {
     v.hyperlink_color = LINK;
     v.selection.bg_fill = PRIMARY.linear_multiply(0.25);
     v.selection.stroke = Stroke::new(1.5_f32, PRIMARY);
-    v.window_corner_radius = CornerRadius::same(18); // HIG 18px reference card
+    // Elevation & Depth: Flat HIG reference cards (18px radius, no canonical shadow)
+    v.window_corner_radius = CornerRadius::same(ROUNDED_DOCS_CARD);
     v.window_stroke = Stroke::new(1.0_f32, BORDER);
-    v.popup_shadow.color = Color32::from_black_alpha(20);
+    v.window_shadow = egui::epaint::Shadow::NONE;
+    v.popup_shadow = egui::epaint::Shadow::NONE;
 
     // Controls: 8px radius
-    let r_ctrl = CornerRadius::same(8);
+    let r_ctrl = CornerRadius::same(ROUNDED_CONTROL);
     v.widgets.noninteractive.corner_radius = r_ctrl;
     v.widgets.noninteractive.bg_fill = SURFACE;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
@@ -178,78 +209,245 @@ pub fn install(ctx: &egui::Context) {
     v.widgets.active.corner_radius = r_ctrl;
     v.widgets.active.bg_fill = PRIMARY.linear_multiply(0.12);
     v.widgets.active.weak_bg_fill = PRIMARY.linear_multiply(0.12);
-    v.widgets.active.bg_stroke = Stroke::new(1.5_f32, PRIMARY);
+    v.widgets.active.bg_stroke = Stroke::new(2.0_f32, PRIMARY);
     v.widgets.active.fg_stroke = Stroke::new(1.0_f32, PRIMARY);
 
     v.widgets.open.corner_radius = r_ctrl;
     ctx.set_visuals(v);
 
     ctx.style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(10.0, 8.0);
-        s.spacing.button_padding = egui::vec2(12.0, 7.0);
-        s.spacing.interact_size.y = 32.0;
+        s.spacing.item_spacing = egui::vec2(10.0, SPACING_COMPACT);
+        s.spacing.button_padding = egui::vec2(SPACING_CONTROL_INLINE, SPACING_COMPACT);
+        s.spacing.interact_size.y = 36.0;
 
         use egui::{FontId, TextStyle};
-        s.text_styles.insert(TextStyle::Heading, FontId::proportional(22.0));
-        s.text_styles.insert(TextStyle::Body, FontId::proportional(14.5));
-        s.text_styles.insert(TextStyle::Button, FontId::proportional(13.5));
-        s.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
-        s.text_styles.insert(TextStyle::Monospace, FontId::monospace(12.5));
+        s.text_styles
+            .insert(TextStyle::Heading, FontId::proportional(TYPO_TILE_HEADING));
+        s.text_styles
+            .insert(TextStyle::Body, FontId::proportional(TYPO_BODY_SMALL));
+        s.text_styles
+            .insert(TextStyle::Button, FontId::proportional(TYPO_BODY_SMALL));
+        s.text_styles
+            .insert(TextStyle::Small, FontId::proportional(TYPO_CAPTION));
+        s.text_styles
+            .insert(TextStyle::Monospace, FontId::monospace(12.5));
     });
 }
 
-/// Apple Marketing Primary 버튼 (`#0071e3`, 둥근 알약, 흰색 텍스트)
-pub fn apple_button_primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let text_color = Color32::WHITE;
-    let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(13.5), text_color);
-    let size = egui::vec2(galley.size().x + 28.0, 34.0);
+/// `marketing-primary` (Large 44px CTA):
+/// `#0071e3` fill (`#0076df` hover, `#006edb` pressed, `2px #0071e3` focus), `#ffffff` text,
+/// `980px` pill radius, `11px 21px` padding, `44px` height, `17px / 400` typography.
+pub fn apple_marketing_primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let text_color = ON_PRIMARY;
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(TYPO_BODY),
+        text_color,
+    );
+    let size = egui::vec2(galley.size().x + SPACING_PILL_INLINE * 2.0, 44.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
 
     let bg = if resp.is_pointer_button_down_on() {
-        Color32::from_rgb(0x00, 0x6E, 0xDB)
+        PRIMARY_PRESSED
     } else if resp.hovered() {
         PRIMARY_HOVER
     } else {
         PRIMARY
     };
 
-    ui.painter().rect(rect, CornerRadius::same(255), bg, Stroke::NONE, egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, text_color);
+    let focus_stroke = if resp.has_focus() {
+        Stroke::new(2.0_f32, PRIMARY)
+    } else {
+        Stroke::NONE
+    };
+
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(ROUNDED_MARKETING_PILL),
+        bg,
+        focus_stroke,
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, text_color);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Apple Danger 버튼 (`#ff3b30` 연한 배경, 빨간 글자, 알약)
+/// `marketing-outline` (Large 44px secondary CTA):
+/// `transparent` fill, `#0066cc` text & `1px solid #0066cc` border,
+/// `980px` pill radius, `11px 21px` padding, `44px` height, `17px / 400` typography.
+pub fn apple_marketing_outline(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(TYPO_BODY),
+        LINK,
+    );
+    let size = egui::vec2(galley.size().x + SPACING_PILL_INLINE * 2.0, 44.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+
+    let stroke = if resp.has_focus() {
+        Stroke::new(2.0_f32, PRIMARY)
+    } else {
+        Stroke::new(1.0_f32, LINK)
+    };
+
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(ROUNDED_MARKETING_PILL),
+        Color32::TRANSPARENT,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, LINK);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// `marketing-compact` (Compact 36px Tile CTA):
+/// `#0071e3` fill (`#0076df` hover, `#006edb` pressed, `2px #0071e3` focus), `#ffffff` text,
+/// `980px` pill radius, `8px 15px` padding, `36px` height, `14px / 400` typography.
+pub fn apple_button_primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let text_color = ON_PRIMARY;
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(TYPO_BODY_SMALL),
+        text_color,
+    );
+    let size = egui::vec2(galley.size().x + SPACING_CONTROL_INLINE * 2.0, 36.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+
+    let bg = if resp.is_pointer_button_down_on() {
+        PRIMARY_PRESSED
+    } else if resp.hovered() {
+        PRIMARY_HOVER
+    } else {
+        PRIMARY
+    };
+
+    let focus_stroke = if resp.has_focus() {
+        Stroke::new(2.0_f32, PRIMARY)
+    } else {
+        Stroke::NONE
+    };
+
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(ROUNDED_MARKETING_PILL),
+        bg,
+        focus_stroke,
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, text_color);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Apple Danger 버튼 (`#ff3b30` 투명 아웃라인 알약, 36px 높이, `8px 15px` 패딩, `14px` 타이포그래피)
 pub fn apple_button_danger(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(13.5), DANGER);
-    let size = egui::vec2(galley.size().x + 26.0, 34.0);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(TYPO_BODY_SMALL),
+        DANGER,
+    );
+    let size = egui::vec2(galley.size().x + SPACING_CONTROL_INLINE * 2.0, 36.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
 
     let bg = if resp.hovered() {
-        DANGER.linear_multiply(0.18)
+        DANGER.linear_multiply(0.12)
     } else {
-        DANGER.linear_multiply(0.10)
+        DANGER.linear_multiply(0.06)
     };
 
-    ui.painter().rect(rect, CornerRadius::same(255), bg, Stroke::new(1.0_f32, DANGER.linear_multiply(0.35)), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, DANGER);
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(ROUNDED_MARKETING_PILL),
+        bg,
+        Stroke::new(1.0_f32, DANGER),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, DANGER);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Apple Marketing Outline 버튼 (투명 배경, `#0066cc` 테두리/글자, 980px 알약)
+/// Compact Outline 버튼 (투명 배경, `#0066cc` 1px 테두리/글자, `980px` 알약, `36px` 높이, `8px 15px` 패딩, `14px` 텍스트)
 pub fn apple_button_outline(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(13.5), LINK);
-    let size = egui::vec2(galley.size().x + 26.0, 34.0);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(TYPO_BODY_SMALL),
+        LINK,
+    );
+    let size = egui::vec2(galley.size().x + SPACING_CONTROL_INLINE * 2.0, 36.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
 
-    let bg = if resp.hovered() {
-        PRIMARY.linear_multiply(0.08)
+    let stroke = if resp.has_focus() {
+        Stroke::new(2.0_f32, PRIMARY)
     } else {
-        Color32::TRANSPARENT
+        Stroke::new(1.0_f32, LINK)
     };
 
-    ui.painter().rect(rect, CornerRadius::same(255), bg, Stroke::new(1.0_f32, LINK), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, LINK);
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(ROUNDED_MARKETING_PILL),
+        Color32::TRANSPARENT,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, LINK);
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// `product-gallery-tab` (Apple Store Product Gallery Tab):
+/// `height: 53px`, `typography: 17px / 400`, `#1d1d1f` foreground with explicit selected indicator.
+pub fn apple_gallery_tab(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
+    let fg = if selected {
+        FOREGROUND
+    } else {
+        MUTED
+    };
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(TYPO_BODY),
+        fg,
+    );
+    let size = egui::vec2(galley.size().x + 24.0, 53.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+
+    let draw_col = if selected || resp.hovered() {
+        FOREGROUND
+    } else {
+        MUTED
+    };
+    ui.painter()
+        .galley(rect.center() - galley.size() / 2.0, galley, draw_col);
+
+    // Keep selected state explicit in gallery-style tabs
+    if selected {
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 6.0, rect.bottom() - 3.0),
+            egui::pos2(rect.right() - 6.0, rect.bottom()),
+        );
+        ui.painter()
+            .rect_filled(bar, CornerRadius::same(2), FOREGROUND);
+    } else if resp.hovered() {
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 10.0, rect.bottom() - 2.0),
+            egui::pos2(rect.right() - 10.0, rect.bottom()),
+        );
+        ui.painter().rect_filled(bar, CornerRadius::same(1), BORDER);
+    }
+
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// `hig-reference-card` (Flat `#ffffff` surface, `18px` radius, `20px` content spacing, no shadow)
+pub fn hig_reference_card_frame(margin: i8) -> egui::Frame {
+    egui::Frame::new()
+        .fill(SURFACE)
+        .corner_radius(CornerRadius::same(ROUNDED_DOCS_CARD))
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .inner_margin(egui::Margin::same(margin))
 }
 
 /// 작은 퀵 칩 버튼 (`오늘`, `내일`, `09:00` 등)

@@ -10,10 +10,12 @@ use openschedule_core::{
     cli::{parse_flexible_date, parse_flexible_time},
     model::{Category, Status, Todo, TodoDraft},
     theme::{
-        self, apple_button_danger, apple_button_outline, apple_button_primary, category_chip,
-        circular_checkbox, icons, quick_chip_button, smart_card, status_pill,
-        status_pill_selectable, BORDER, CANVAS, DANGER, FOREGROUND, MUTED, PRIMARY, PURPLE,
-        SECONDARY, SUCCESS, SURFACE, WARNING,
+        self, apple_button_danger, apple_button_outline, apple_button_primary, apple_gallery_tab,
+        apple_marketing_outline, apple_marketing_primary, category_chip, circular_checkbox,
+        hig_reference_card_frame, icons, quick_chip_button, smart_card, status_pill,
+        status_pill_selectable, BORDER, CANVAS, DANGER, FOREGROUND, LINK, MUTED, PRIMARY, PURPLE,
+        ROUNDED_CONTROL, SECONDARY, SUCCESS, SURFACE, TYPO_BODY, TYPO_BODY_SMALL, TYPO_CAPTION,
+        TYPO_TILE_HEADING, WARNING,
     },
     DateFilter, Settings, SmartCounts, Store, TodoQuery,
 };
@@ -67,6 +69,7 @@ pub struct MainView {
     pub smart_counts: SmartCounts,
     pub category_counts: HashMap<i64, usize>,
     last_data_version: i64,
+    last_json_sig: u64,
     last_refresh_at: Instant,
 
     // 인라인 일정 빠른 추가 입력값
@@ -127,6 +130,7 @@ impl MainView {
             smart_counts: SmartCounts::default(),
             category_counts: HashMap::new(),
             last_data_version: -1,
+            last_json_sig: 0,
             last_refresh_at: Instant::now() - Duration::from_secs(10),
 
             quick_title: String::new(),
@@ -160,6 +164,11 @@ impl MainView {
             toast_message: None,
         };
         s.force_refresh(store);
+        // 시작 시 '오늘' 할 일이 0개인데 '전체'에 등록된 일정이 있으면 자동으로 '전체'를 보여줌으로써 데이터 누락 오해를 방지
+        if s.todos.is_empty() && s.smart_counts.all > 0 {
+            s.smart_filter = SmartListFilter::All;
+            s.force_refresh(store);
+        }
         s
     }
 
@@ -176,7 +185,12 @@ impl MainView {
         let ver = store.data_version();
         let elapsed = self.last_refresh_at.elapsed() >= Duration::from_millis(1200);
         if self.last_data_version == -1 || ver != self.last_data_version || elapsed {
-            self.last_data_version = ver;
+            let json_sig = store.schedules_dir_signature();
+            if self.last_data_version == -1 || json_sig != self.last_json_sig {
+                let _ = store.sync_all_json_files();
+                self.last_json_sig = store.schedules_dir_signature();
+            }
+            self.last_data_version = store.data_version();
             self.last_refresh_at = Instant::now();
 
             self.categories = store.categories().unwrap_or_default();
@@ -202,7 +216,7 @@ impl MainView {
             let q = TodoQuery {
                 date: date_filter,
                 category: if self.view_mode == RemindersViewMode::Calendar {
-                    self.selected_category_id.map(Some)
+                    None
                 } else {
                     self.selected_category_id.map(Some)
                 },
@@ -257,25 +271,25 @@ impl MainView {
             self.open_new_todo_modal();
         }
 
-        // ── 상단 네비게이션 바 ──
+        // ── 상단 네비게이션 바 (Apple Product Gallery Tab 53px 규격) ──
         egui::TopBottomPanel::top("top_navbar")
-            .exact_height(54.0)
+            .exact_height(56.0)
             .frame(
                 egui::Frame::new()
                     .fill(SURFACE)
-                    .inner_margin(egui::Margin::symmetric(22, 8))
+                    .inner_margin(egui::Margin::symmetric(22, 0))
                     .stroke(Stroke::new(1.0_f32, BORDER)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     // 브랜드 로고
                     let (logo_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+                        ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
                     ui.painter()
-                        .rect_filled(logo_rect, CornerRadius::same(6), PRIMARY);
+                        .rect_filled(logo_rect, CornerRadius::same(ROUNDED_CONTROL), PRIMARY);
                     let check_g = ui.painter().layout_no_wrap(
                         icons::CHECK.into(),
-                        egui::FontId::proportional(13.0),
+                        egui::FontId::proportional(TYPO_BODY_SMALL),
                         Color32::WHITE,
                     );
                     ui.painter().galley(
@@ -286,16 +300,16 @@ impl MainView {
 
                     ui.label(
                         RichText::new("OpenSchedule")
-                            .size(16.5)
+                            .size(TYPO_BODY)
                             .strong()
                             .color(FOREGROUND),
                     );
 
-                    ui.add_space(24.0);
+                    ui.add_space(20.0);
 
-                    // 네비게이션 탭
+                    // 네비게이션 탭 (Apple Store Product Gallery Tab 53px height, 17px typography, explicit selected state)
                     let tab_reminders = self.active_tab == ActiveTab::Reminders;
-                    if quick_chip_button(
+                    if apple_gallery_tab(
                         ui,
                         &format!("{} 미리알림", icons::LIST_CHECKS),
                         tab_reminders,
@@ -306,7 +320,7 @@ impl MainView {
                     }
 
                     let tab_settings = self.active_tab == ActiveTab::Settings;
-                    if quick_chip_button(
+                    if apple_gallery_tab(
                         ui,
                         &format!("{} 설정 & CLI", icons::GEAR),
                         tab_settings,
@@ -321,13 +335,13 @@ impl MainView {
                         if ts.elapsed() < Duration::from_secs(4) {
                             ui.add_space(12.0);
                             let col = if is_err { DANGER } else { SUCCESS };
-                            ui.label(RichText::new(msg).size(13.0).strong().color(col));
+                            ui.label(RichText::new(msg).size(TYPO_BODY_SMALL).strong().color(col));
                         } else {
                             self.toast_message = None;
                         }
                     }
 
-                    // 우측 액션 버튼
+                    // 우측 액션 버튼 (marketing-compact 36px & marketing-outline 36px)
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if apple_button_primary(
                             ui,
@@ -346,16 +360,34 @@ impl MainView {
                         {
                             on_toggle_overlay();
                         }
+
+                        if apple_button_outline(
+                            ui,
+                            &format!("{} 데이터 동기화", icons::ARROWS_CLOCKWISE),
+                        )
+                        .on_hover_text("SQLite DB와 schedules/{date}_schedule.json 파일 양방향 동기화 및 새로고침")
+                        .clicked()
+                        {
+                            let synced = store.sync_all_json_files().unwrap_or(0);
+                            self.force_refresh(store);
+                            self.show_toast(
+                                format!(
+                                    "✓ 데이터 동기화 완료 (전체 {}개 일정, {synced}건 JSON 병합)",
+                                    self.smart_counts.all
+                                ),
+                                false,
+                            );
+                        }
                     });
                 });
             });
 
-        // ── 메인 컨텐츠 영역 ──
+        // ── 메인 컨텐츠 영역 (Fog Canvas `#f5f5f7`, 20px content spacing) ──
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
                     .fill(CANVAS)
-                    .inner_margin(egui::Margin::symmetric(18, 16)),
+                    .inner_margin(egui::Margin::symmetric(20, 16)),
             )
             .show(ctx, |ui| match self.active_tab {
                 ActiveTab::Reminders => self.show_reminders_tab(ui, store),
@@ -379,17 +411,12 @@ impl MainView {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
 
-            // 1. 좌측 사이드바 카드 (240px)
-            egui::Frame::new()
-                .fill(SURFACE)
-                .corner_radius(CornerRadius::same(18))
-                .stroke(Stroke::new(1.0_f32, BORDER))
-                .inner_margin(egui::Margin::same(16))
-                .show(ui, |ui| {
-                    ui.set_width(240.0);
-                    ui.set_min_height(avail_h - 32.0);
-                    self.render_sidebar(ui, store);
-                });
+            // 1. 좌측 사이드바 카드 (240px, HIG 18px Reference Card)
+            hig_reference_card_frame(16).show(ui, |ui| {
+                ui.set_width(240.0);
+                ui.set_min_height(avail_h - 32.0);
+                self.render_sidebar(ui, store);
+            });
 
             // 인스펙터가 열려 있으면 우측 폭 확보
             let inspector_open = self.selected_todo_id.is_some();
@@ -399,30 +426,20 @@ impl MainView {
                 (ui.available_width() - 32.0).max(340.0)
             };
 
-            // 2. 중앙 메인 목록 카드
-            egui::Frame::new()
-                .fill(SURFACE)
-                .corner_radius(CornerRadius::same(18))
-                .stroke(Stroke::new(1.0_f32, BORDER))
-                .inner_margin(egui::Margin::same(20))
-                .show(ui, |ui| {
-                    ui.set_width(center_w);
-                    ui.set_min_height(avail_h - 40.0);
-                    self.render_center_column(ui, store);
-                });
+            // 2. 중앙 메인 목록 카드 (HIG 18px Reference Card, 20px content padding)
+            hig_reference_card_frame(20).show(ui, |ui| {
+                ui.set_width(center_w);
+                ui.set_min_height(avail_h - 40.0);
+                self.render_center_column(ui, store);
+            });
 
             // 3. 우측 세부사항 인스펙터 카드 (열려 있을 때만)
             if inspector_open {
-                egui::Frame::new()
-                    .fill(SURFACE)
-                    .corner_radius(CornerRadius::same(18))
-                    .stroke(Stroke::new(1.0_f32, BORDER))
-                    .inner_margin(egui::Margin::same(18))
-                    .show(ui, |ui| {
-                        ui.set_width(280.0);
-                        ui.set_min_height(avail_h - 36.0);
-                        self.render_inspector(ui, store);
-                    });
+                hig_reference_card_frame(18).show(ui, |ui| {
+                    ui.set_width(280.0);
+                    ui.set_min_height(avail_h - 36.0);
+                    self.render_inspector(ui, store);
+                });
             }
         });
     }
@@ -647,16 +664,34 @@ impl MainView {
                     .size(if self.view_mode == RemindersViewMode::Calendar {
                         22.0
                     } else {
-                        28.0
+                        TYPO_TILE_HEADING
                     })
                     .strong()
                     .color(title_color),
             );
             ui.label(
                 RichText::new(format!("{}개", self.todos.len()))
-                    .size(16.0)
+                    .size(TYPO_BODY)
                     .color(MUTED),
             );
+            if self.selected_category_id.is_some()
+                || self.status_filter.is_some()
+                || !self.search_query.is_empty()
+            {
+                if ui
+                    .button(
+                        RichText::new("필터 초기화")
+                            .size(TYPO_CAPTION)
+                            .color(LINK),
+                    )
+                    .clicked()
+                {
+                    self.selected_category_id = None;
+                    self.status_filter = None;
+                    self.search_query.clear();
+                    self.force_refresh(store);
+                }
+            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let resp = ui.add(
@@ -910,7 +945,7 @@ impl MainView {
         // 4. 할 일 체크리스트 스크롤 영역
         if self.todos.is_empty() {
             ui.vertical_centered(|ui| {
-                ui.add_space(36.0);
+                ui.add_space(32.0);
                 ui.label(
                     RichText::new(icons::CHECK_CIRCLE)
                         .size(36.0)
@@ -918,18 +953,55 @@ impl MainView {
                 );
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("등록된 일정이 없습니다")
-                        .size(16.0)
+                    RichText::new("현재 조건에 표시할 일정이 없습니다")
+                        .size(TYPO_BODY)
                         .strong()
-                        .color(MUTED),
+                        .color(FOREGROUND),
                 );
                 ui.label(
                     RichText::new(
                         "위의 입력란에서 바로 추가하거나 우측 상단 [+ 새 일정 추가] 버튼을 눌러 등록하세요.",
                     )
-                    .size(13.0)
+                    .size(TYPO_BODY_SMALL)
                     .color(MUTED),
                 );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if self.smart_counts.all > 0
+                        && (self.smart_filter != SmartListFilter::All
+                            || self.selected_category_id.is_some()
+                            || self.status_filter.is_some()
+                            || !self.search_query.is_empty()
+                            || self.view_mode == RemindersViewMode::Calendar)
+                    {
+                        if apple_marketing_primary(
+                            ui,
+                            &format!(
+                                "{} 전체 일정 ({}개) 모두 보기",
+                                icons::TRAY,
+                                self.smart_counts.all
+                            ),
+                        )
+                        .clicked()
+                        {
+                            self.view_mode = RemindersViewMode::TodoList;
+                            self.smart_filter = SmartListFilter::All;
+                            self.selected_category_id = None;
+                            self.status_filter = None;
+                            self.search_query.clear();
+                            self.force_refresh(store);
+                        }
+                    }
+                    if apple_marketing_outline(
+                        ui,
+                        &format!("{} 로컬 JSON 다시 불러오기", icons::ARROWS_CLOCKWISE),
+                    )
+                    .clicked()
+                    {
+                        let _ = store.sync_all_json_files();
+                        self.force_refresh(store);
+                    }
+                });
             });
             return;
         }

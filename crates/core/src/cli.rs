@@ -320,12 +320,15 @@ fn is_known_command(cmd: &str) -> bool {
     matches!(
         cmd,
         "add"
+            | "ass"
+            | "ad"
             | "create"
             | "new"
             | "추가"
             | "등록"
             | "list"
             | "ls"
+            | "l"
             | "todo"
             | "todos"
             | "목록"
@@ -347,6 +350,7 @@ fn is_known_command(cmd: &str) -> bool {
             | "edit"
             | "수정"
             | "delete"
+            | "del"
             | "rm"
             | "remove"
             | "삭제"
@@ -370,6 +374,25 @@ fn is_known_command(cmd: &str) -> bool {
 
 /// 자연어 입력(예: "내일 오후 2시 팀 주간 회의 #업무 // 분기 목표 점검")을 파싱해 일정 등록
 fn handle_natural_language_add(store: &Store, input: &str) -> Result<()> {
+    // 만약 입력에 `-d`, `-t`, `-c`, `-m` 등 CLI 플래그가 포함되어 있다면 `cmd_add` 파서로 위임
+    let raw_tokens = split_cli_tokens(input);
+    if raw_tokens.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "-d" | "--date" | "-t" | "--time" | "-c" | "--category" | "-m" | "--memo"
+        )
+    }) {
+        let mut cleaned = raw_tokens;
+        if cleaned
+            .first()
+            .map(|s| s.starts_with('/'))
+            .unwrap_or(false)
+        {
+            cleaned.remove(0);
+        }
+        return cmd_add(store, &cleaned);
+    }
+
     let today = Local::now().date_naive();
     let mut due_date = today;
     let mut due_time: Option<NaiveTime> = None;
@@ -504,8 +527,8 @@ fn execute_with_store(store: &Store, args: &[String]) -> Result<()> {
     let rest = &args[1..];
 
     match cmd {
-        "add" | "create" | "new" | "추가" | "등록" => cmd_add(store, rest),
-        "list" | "ls" | "todo" | "todos" | "목록" | "조회" => cmd_list(store, rest),
+        "add" | "ass" | "ad" | "create" | "new" | "추가" | "등록" => cmd_add(store, rest),
+        "list" | "ls" | "l" | "todo" | "todos" | "목록" | "조회" => cmd_list(store, rest),
         "today" | "오늘" => {
             let mut v = vec!["--filter".to_string(), "today_and_overdue".to_string()];
             v.extend_from_slice(rest);
@@ -516,7 +539,7 @@ fn execute_with_store(store: &Store, args: &[String]) -> Result<()> {
         "done" | "complete" | "완료" => cmd_done(store, rest),
         "status" | "상태" => cmd_status(store, rest),
         "update" | "edit" | "수정" => cmd_update(store, rest),
-        "delete" | "rm" | "remove" | "삭제" => cmd_delete(store, rest),
+        "delete" | "del" | "rm" | "remove" | "삭제" => cmd_delete(store, rest),
         "categories" | "cats" | "cat" | "category" | "카테고리" => cmd_categories(store, rest),
         "summary" | "counts" | "요약" => cmd_summary(store, rest),
         "sync" | "json" | "load" | "동기화" => cmd_json_sync(store, rest),

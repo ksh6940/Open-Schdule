@@ -63,6 +63,7 @@ pub struct TodoJsonEntry {
     pub category_id: Option<i64>,
     #[serde(default)]
     pub category_name: String,
+    #[serde(default = "default_due_date")]
     pub due_date: NaiveDate,
     #[serde(default)]
     pub due_time: Option<NaiveTime>,
@@ -74,6 +75,10 @@ pub struct TodoJsonEntry {
     pub created_at: DateTime<Local>,
     #[serde(default = "Local::now")]
     pub updated_at: DateTime<Local>,
+}
+
+fn default_due_date() -> NaiveDate {
+    Local::now().date_naive()
 }
 
 pub struct Store {
@@ -113,7 +118,7 @@ const DEFAULT_CATEGORIES: &[(&str, u32)] = &[
 impl Store {
     pub fn open_default() -> Result<Self> {
         let store = Self::open(&crate::paths::db_path())?;
-        let _ = store.export_all_dates_to_json();
+        let _ = store.sync_all_json_files();
         Ok(store)
     }
 
@@ -242,26 +247,41 @@ impl Store {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("JSON 파일 읽기 실패: {}", path.display()))?;
 
-        let entries: Vec<TodoJsonEntry> =
+        let file_date = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix("_schedule.json"))
+            .and_then(|ds| NaiveDate::parse_from_str(ds, "%Y-%m-%d").ok());
+
+        let (header_date, entries): (Option<NaiveDate>, Vec<TodoJsonEntry>) =
             if let Ok(daily) = serde_json::from_str::<DailyScheduleFile>(&raw) {
-                daily.todos
+                let hd = NaiveDate::parse_from_str(&daily.date, "%Y-%m-%d").ok();
+                (hd, daily.todos)
             } else {
-                serde_json::from_str::<Vec<TodoJsonEntry>>(&raw)
-                    .with_context(|| format!("JSON 파싱 실패: {}", path.display()))?
+                let list = serde_json::from_str::<Vec<TodoJsonEntry>>(&raw)
+                    .with_context(|| format!("JSON 파싱 실패: {}", path.display()))?;
+                (None, list)
             };
 
+        let existing_cats = self.categories().unwrap_or_default();
         let mut imported = 0;
         for entry in entries {
             if entry.title.trim().is_empty() {
                 continue;
             }
-            let cat_id = if let Some(cid) = entry.category_id {
+            // category_id가 실제 DB에 존재하는지 검증하고, 없으면 category_name으로 매핑
+            let valid_cid = entry
+                .category_id
+                .filter(|cid| existing_cats.iter().any(|c| c.id == *cid));
+            let cat_id = if let Some(cid) = valid_cid {
                 Some(cid)
             } else if !entry.category_name.trim().is_empty() && entry.category_name != "미분류" {
                 self.find_category(&entry.category_name, true)?
             } else {
                 None
             };
+
+            let resolved_date = file_date.or(header_date).unwrap_or(entry.due_date);
 
             // 동일한 ID가 있거나 (같은 날짜 + 같은 제목)이 있는지 확인
             let exists_by_id = if entry.id > 0 {
@@ -274,7 +294,7 @@ impl Store {
                 title: entry.title.trim().to_string(),
                 memo: entry.memo,
                 category_id: cat_id,
-                due_date: entry.due_date,
+                due_date: resolved_date,
                 due_time: entry.due_time,
                 status: entry.status,
                 condition_note: entry.condition_note,
@@ -337,15 +357,24 @@ impl Store {
 
     /// `schedules/` 디렉토리의 모든 `{date}_schedule.json` 파일을 스캔하여 SQLite DB와 양방향 동기화합니다.
     pub fn sync_all_json_files(&self) -> Result<usize> {
-        let dir = crate::paths::schedules_dir();
         let mut total_imported = 0;
-        if let Ok(read_dir) = std::fs::read_dir(&dir) {
-            for entry in read_dir.flatten() {
-                let path = entry.path();
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.ends_with("_schedule.json") {
-                        if let Ok(n) = self.import_date_json_file(&path) {
-                            total_imported += n;
+        let primary_dir = crate::paths::schedules_dir();
+        let appdata_dir = crate::paths::appdata_schedules_dir();
+
+        let mut dirs = vec![primary_dir.clone()];
+        if appdata_dir != primary_dir {
+            dirs.push(appdata_dir);
+        }
+
+        for dir in dirs {
+            if let Ok(read_dir) = std::fs::read_dir(&dir) {
+                for entry in read_dir.flatten() {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.ends_with("_schedule.json") {
+                            if let Ok(n) = self.import_date_json_file(&path) {
+                                total_imported += n;
+                            }
                         }
                     }
                 }
@@ -353,6 +382,32 @@ impl Store {
         }
         self.export_all_dates_to_json()?;
         Ok(total_imported)
+    }
+
+    /// `schedules/` 디렉토리 내 `{date}_schedule.json` 파일들의 변경 감지용 해시 시그니처.
+    pub fn schedules_dir_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let dir = crate::paths::schedules_dir();
+        if let Ok(read_dir) = std::fs::read_dir(&dir) {
+            let mut entries: Vec<_> = read_dir.flatten().collect();
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with("_schedule.json") {
+                        name.hash(&mut hasher);
+                        if let Ok(meta) = entry.metadata() {
+                            meta.len().hash(&mut hasher);
+                            if let Ok(mtime) = meta.modified() {
+                                mtime.hash(&mut hasher);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        hasher.finish()
     }
 
     /// 현재 로컬에 저장된 모든 `{date}_schedule.json` 파일 목록을 반환합니다.
@@ -694,12 +749,12 @@ impl Store {
             |r| r.get(0),
         )?;
         let scheduled_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM todos WHERE due_date > ?1 AND status NOT IN ('done', 'conditional_done')",
+            "SELECT COUNT(*) FROM todos WHERE due_date > ?1",
             params![today],
             |r| r.get(0),
         )?;
         let all_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM todos WHERE status NOT IN ('done', 'conditional_done')",
+            "SELECT COUNT(*) FROM todos",
             [],
             |r| r.get(0),
         )?;
@@ -716,11 +771,11 @@ impl Store {
         })
     }
 
-    /// 각 카테고리별 미완료 할 일 카운트.
+    /// 각 카테고리별 할 일 카운트 (DateFilter::All 기준과 일치하도록 전체 카운트).
     pub fn category_counts(&self) -> Result<HashMap<i64, usize>> {
         let mut map = HashMap::new();
         let mut st = self.conn.prepare(
-            "SELECT category_id, COUNT(*) FROM todos WHERE category_id IS NOT NULL AND status NOT IN ('done', 'conditional_done') GROUP BY category_id",
+            "SELECT category_id, COUNT(*) FROM todos WHERE category_id IS NOT NULL GROUP BY category_id",
         )?;
         let rows = st.query_map([], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as usize))
