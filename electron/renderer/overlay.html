@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenSchedule Webcam Overlay</title>
+  <link rel="stylesheet" href="css/phosphor.css">
+  <link rel="stylesheet" href="css/apple-theme.css">
+  <link rel="stylesheet" href="css/overlay.css">
+</head>
+<body>
+  <div id="overlay-card">
+    <!-- 헤더 -->
+    <div class="overlay-header">
+      <div class="overlay-header-left">
+        <div class="overlay-calendar-badge" id="overlay-calendar-day">14</div>
+        <div class="overlay-header-titles">
+          <span class="overlay-main-title">오늘의 미리알림</span>
+          <span class="overlay-sub-date" id="overlay-date-text">10월 14일 수요일</span>
+        </div>
+      </div>
+
+      <div class="overlay-header-right">
+        <span class="overlay-progress-pill" id="overlay-progress-pill">0/0 완료</span>
+        <button class="apple-btn-outline" id="btn-open-manager" style="padding: 4px 10px; height: 28px; font-size: 12px;">
+          <span>관리 앱</span> <i class="ph-bold ph-arrow-square-out"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- 인라인 빠른 등록 -->
+    <div class="overlay-quick-add" style="display: flex; align-items: center; gap: 8px;">
+      <div class="quick-add-circle" style="width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--apple-primary); display: flex; align-items: center; justify-content: center; color: var(--apple-primary); font-size: 11px; flex-shrink: 0;">
+        <i class="ph-bold ph-plus"></i>
+      </div>
+      <input type="text" class="overlay-quick-input" id="overlay-quick-input" placeholder="오늘 할 일 빠르게 추가... (Enter)">
+      <input type="time" id="overlay-quick-time" style="border: 1px solid var(--apple-border); border-radius: 6px; padding: 2px 6px; font-size: 12px; background: #fff; color: var(--apple-foreground); outline: none;" title="시간 (선택)">
+      <button class="apple-btn-compact" id="btn-overlay-quick-add" style="padding: 4px 12px; height: 28px; font-size: 12px;">추가</button>
+    </div>
+
+    <!-- 체크리스트 목록 -->
+    <div class="overlay-scroll-list" id="overlay-list-container">
+      <!-- JS 렌더링 -->
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/overlay.js"></script>
+</body>
+</html>
+

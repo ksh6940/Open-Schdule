@@ -1,0 +1,947 @@
+/* ── Main App Layout (Apple Design System) ── */
+#app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--apple-canvas);
+}
+
+/* ── Top Navigation Bar (product-gallery-tab: 53px height, 17px/400) ── */
+.top-navbar {
+  height: 53px;
+  background-color: var(--liquid-glass-bg);
+  backdrop-filter: var(--liquid-glass-blur);
+  -webkit-backdrop-filter: var(--liquid-glass-blur);
+  border-bottom: 1px solid var(--apple-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.374px;
+  color: var(--apple-foreground);
+}
+
+.nav-brand .brand-logo {
+  width: 24px;
+  height: 24px;
+  background-color: var(--apple-primary);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--apple-on-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Product Gallery Tab Style (height 53px, 17px/400, #1d1d1f) */
+.nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 53px;
+}
+
+.nav-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  height: 53px;
+  padding: 0 16px;
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  letter-spacing: -0.374px;
+  color: var(--apple-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  outline: none;
+}
+
+.nav-tab-btn:hover {
+  color: var(--apple-foreground);
+}
+
+.nav-tab-btn.active {
+  color: var(--apple-foreground);
+  font-weight: 600;
+  border-bottom-color: var(--apple-foreground);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Main Content Area (Content Spacing: 20px) ── */
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  padding: var(--space-content);
+  gap: var(--space-content);
+}
+
+/* ── 3-Column Layout (hig-reference-card: #ffffff, rounded 18px, flat no shadow) ── */
+.sidebar-col {
+  width: 268px;
+  background-color: var(--apple-surface);
+  border-radius: var(--radius-docs-card);
+  border: 1px solid var(--apple-border);
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+.center-col {
+  flex: 1;
+  background-color: var(--apple-surface);
+  border-radius: var(--radius-docs-card);
+  border: 1px solid var(--apple-border);
+  display: flex;
+  flex-direction: column;
+  padding: 24px 28px;
+  min-width: 420px;
+  overflow: hidden;
+}
+
+.inspector-col {
+  width: 320px;
+  background-color: var(--apple-surface);
+  border-radius: var(--radius-docs-card);
+  border: 1px solid var(--apple-border);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  transition: all 0.2s ease;
+}
+
+.inspector-col.hidden {
+  display: none;
+}
+
+/* ── 2x2 Smart Cards Grid ── */
+.smart-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.smart-card {
+  background-color: var(--apple-canvas);
+  border: 1.5px solid transparent;
+  border-radius: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 72px;
+}
+
+.smart-card:hover {
+  background-color: var(--apple-surface-hover);
+}
+
+.smart-card.active {
+  background-color: rgba(0, 113, 227, 0.08);
+  border-color: var(--apple-primary);
+}
+
+.smart-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.smart-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--apple-on-primary);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.smart-icon.today { background-color: var(--apple-primary); }
+.smart-icon.scheduled { background-color: var(--apple-warning); }
+.smart-icon.all { background-color: var(--apple-secondary); }
+.smart-icon.completed { background-color: var(--apple-success); }
+
+.smart-count {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--apple-foreground);
+  line-height: 1;
+}
+
+.smart-label {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+  color: var(--apple-muted);
+}
+
+.smart-card.active .smart-label {
+  color: var(--apple-foreground);
+  font-weight: 600;
+}
+
+/* ── My Lists (내 목록) ── */
+.lists-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  color: var(--apple-muted);
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.lists-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  font-size: 14px;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+  color: var(--apple-foreground);
+}
+
+.list-item:hover {
+  background-color: var(--apple-surface-hover);
+}
+
+.list-item.active {
+  background-color: rgba(0, 113, 227, 0.1);
+  color: var(--apple-primary);
+  font-weight: 600;
+}
+
+.list-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.list-count {
+  font-size: 12px;
+  color: var(--apple-muted);
+}
+
+.add-list-btn {
+  background: transparent;
+  border: none;
+  color: var(--apple-link);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  outline: none;
+}
+
+.add-list-btn:hover {
+  text-decoration: underline;
+}
+
+/* ── Center Header (Section 40px/600 & Mode Switcher) ── */
+.center-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.center-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+/* Apple Section Typography: 40px / 600 / 44px */
+.center-title {
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 44px;
+  color: var(--apple-foreground);
+}
+
+.center-count-subtitle {
+  font-family: var(--font-display);
+  font-size: 20px;
+  color: var(--apple-muted);
+  font-weight: 400;
+}
+
+/* View Mode Segmented Switch ([투두리스트 | 캘린더 뷰]) */
+.view-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  background-color: var(--apple-canvas);
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--apple-border);
+}
+
+.view-mode-btn {
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-pill);
+  padding: 6px 14px;
+  height: 30px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+  color: var(--apple-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  outline: none;
+}
+
+.view-mode-btn:hover {
+  color: var(--apple-foreground);
+}
+
+.view-mode-btn.active {
+  background-color: var(--apple-primary);
+  color: var(--apple-on-primary);
+  font-weight: 500;
+}
+
+.search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-input-wrapper .search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--apple-muted);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.center-search-input {
+  width: 190px;
+  height: 36px;
+  font-size: 14px;
+  padding: 6px 12px 6px 32px;
+  border-radius: var(--radius-pill);
+}
+
+/* ── Calendar View Grid ── */
+.calendar-view-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 16px;
+  background-color: var(--apple-canvas);
+  border-radius: var(--radius-docs-card);
+  border: 1px solid var(--apple-border);
+}
+
+.calendar-view-box.hidden {
+  display: none;
+}
+
+.calendar-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.calendar-month-label {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--apple-foreground);
+}
+
+.calendar-weekdays-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--apple-muted);
+  padding-bottom: 4px;
+}
+
+.calendar-days-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.cal-day-cell {
+  background-color: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-control);
+  min-height: 62px;
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.12s ease;
+}
+
+.cal-day-cell:hover {
+  border-color: var(--apple-primary);
+  background-color: var(--apple-surface-hover);
+}
+
+.cal-day-cell.empty {
+  background-color: transparent;
+  border-color: transparent;
+  cursor: default;
+}
+
+.cal-day-cell.today {
+  border-color: var(--apple-primary);
+  background-color: rgba(0, 113, 227, 0.04);
+}
+
+.cal-day-cell.selected {
+  border: 2px solid var(--apple-primary);
+  background-color: rgba(0, 113, 227, 0.1);
+}
+
+.cal-day-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--apple-foreground);
+}
+
+.cal-day-cell.sun .cal-day-num { color: var(--apple-danger); }
+.cal-day-cell.sat .cal-day-num { color: var(--apple-link); }
+
+.cal-day-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background-color: rgba(0, 113, 227, 0.14);
+  color: var(--apple-primary);
+}
+
+.cal-day-badge.all-done {
+  background-color: rgba(52, 199, 89, 0.16);
+  color: #1f8b3b;
+}
+
+.cal-day-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.cal-day-item-dot {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--apple-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-day-item-dot.done {
+  text-decoration: line-through;
+  color: var(--apple-muted);
+}
+
+.cal-selected-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: var(--apple-surface);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--apple-border);
+  font-size: 13px;
+  color: var(--apple-secondary);
+}
+
+.cal-json-badge {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--apple-link);
+  background-color: rgba(0, 102, 204, 0.08);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+/* ── Inline Quick Add Row ── */
+.inline-quick-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 15px;
+  background-color: var(--apple-canvas);
+  border-radius: 12px;
+  border: 1px solid var(--apple-border);
+  margin-bottom: 14px;
+  transition: all 0.15s ease;
+}
+
+.inline-quick-add:focus-within {
+  background-color: var(--apple-surface);
+  border-color: var(--apple-primary);
+  box-shadow: 0 0 0 2px var(--apple-primary);
+}
+
+.quick-add-main-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.quick-add-options-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 30px;
+}
+
+.quick-opt-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-control);
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--apple-muted);
+}
+
+.quick-opt-input {
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--apple-foreground);
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+
+.quick-opt-memo {
+  flex: 1;
+  min-width: 120px;
+  background-color: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-control);
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--apple-foreground);
+  font-family: inherit;
+  outline: none;
+}
+
+.quick-opt-memo:focus {
+  border-color: var(--apple-primary);
+}
+
+.quick-add-circle {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--apple-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--apple-primary);
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.quick-add-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  font-family: var(--font-text);
+  font-size: 17px;
+  line-height: 25px;
+  letter-spacing: -0.374px;
+  color: var(--apple-foreground);
+  outline: none;
+}
+
+.quick-add-input::placeholder {
+  color: var(--apple-muted);
+}
+
+/* ── Status Filter Pills ── */
+.status-filters-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--apple-border);
+  flex-wrap: wrap;
+}
+
+.status-filters-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Checklist Items Scroll ── */
+.checklist-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--apple-border);
+  background-color: var(--apple-surface);
+  transition: all 0.12s ease;
+  cursor: pointer;
+}
+
+.todo-row:hover {
+  background-color: var(--apple-surface-hover);
+  border-color: rgba(0, 113, 227, 0.35);
+}
+
+.todo-row.selected {
+  background-color: rgba(0, 113, 227, 0.06);
+  border-color: var(--apple-primary);
+}
+
+.todo-row-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.todo-row-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Body 17px / 400 / 25px */
+.todo-title {
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 24px;
+  letter-spacing: -0.374px;
+  color: var(--apple-foreground);
+}
+
+.todo-title.done {
+  text-decoration: line-through;
+  color: var(--apple-muted);
+}
+
+.todo-title.overdue {
+  color: var(--apple-danger);
+  font-weight: 600;
+}
+
+/* Caption 12px / 400 / 16px */
+.todo-metadata {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  color: var(--apple-muted);
+}
+
+.condition-tag {
+  background-color: rgba(175, 82, 222, 0.1);
+  color: var(--apple-purple);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.overdue-tag {
+  color: var(--apple-danger);
+  font-weight: 600;
+}
+
+.todo-info-btn {
+  color: var(--apple-muted);
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 50%;
+  transition: color 0.15s ease;
+}
+
+.todo-row:hover .todo-info-btn {
+  color: var(--apple-primary);
+}
+
+/* ── Inspector Panel ── */
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.inspector-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--apple-foreground);
+}
+
+.inspector-close-btn {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  color: var(--apple-muted);
+  cursor: pointer;
+  outline: none;
+}
+
+.inspector-close-btn:hover {
+  color: var(--apple-foreground);
+}
+
+.inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.inspector-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  color: var(--apple-muted);
+}
+
+.quick-chips-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.quick-chip {
+  background-color: var(--apple-canvas);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--apple-foreground);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.quick-chip:hover {
+  background-color: rgba(0, 113, 227, 0.1);
+  color: var(--apple-primary);
+  border-color: var(--apple-primary);
+}
+
+/* ── Modals ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal-card {
+  width: 380px;
+  background-color: var(--apple-surface);
+  border-radius: var(--radius-docs-card);
+  padding: 24px;
+  border: 1px solid var(--apple-border);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.color-dots-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.color-dot-pick {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+  position: relative;
+}
+
+.color-dot-pick.selected {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--apple-primary);
+}
+
+/* ── Settings & CLI Guide Tab (hig-reference-card: #ffffff, rounded 18px) ── */
+.tab-view-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.apple-card {
+  background-color: var(--apple-surface);
+  border-radius: var(--radius-docs-card);
+  border: 1px solid var(--apple-border);
+  padding: 24px 28px;
+}
+
+/* Tile Heading: 28px / 400 / 32px */
+.card-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 32px;
+  letter-spacing: 0.196px;
+  color: var(--apple-foreground);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-subtitle {
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: -0.224px;
+  color: var(--apple-muted);
+  margin-bottom: 16px;
+}
+
+.cli-guide-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.cli-guide-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cli-guide-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--apple-foreground);
+}
+
+.cli-code-block {
+  background-color: var(--apple-canvas);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-control);
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--apple-link);
+  overflow-x: auto;
+  margin: 0;
+  user-select: all;
+}
+

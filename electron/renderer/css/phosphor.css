@@ -1,0 +1,27 @@
+/* ── Phosphor Icons Bundle ── */
+@import "../../../node_modules/@phosphor-icons/web/src/regular/style.css";
+@import "../../../node_modules/@phosphor-icons/web/src/bold/style.css";
+@import "../../../node_modules/@phosphor-icons/web/src/fill/style.css";
+
+/* 아이콘 기본 렌더링 최적화 */
+i[class*="ph"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -0.125em;
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+.ph-sm {
+  font-size: 0.9em;
+}
+
+.ph-lg {
+  font-size: 1.35em;
+}
+
+.ph-xl {
+  font-size: 1.6em;
+}
+

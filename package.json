@@ -1,0 +1,34 @@
+{
+  "name": "openschdule",
+  "version": "1.0.0",
+  "description": "OpenSchedule - Apple Reminders 데스크톱 앱 & 웹캠 핫존 드롭다운 & AI 연동 CLI",
+  "main": "electron/main.js",
+  "bin": {
+    "openschedule": "./cli.js",
+    "openlab": "./cli.js"
+  },
+  "scripts": {
+    "start": "electron electron/main.js",
+    "engine": "cargo run -p openschedule-agent -- --headless",
+    "cli": "node cli.js",
+    "todo": "node cli.js"
+  },
+  "keywords": [
+    "schedule",
+    "todo",
+    "reminders",
+    "cli",
+    "electron",
+    "rust"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^44.7.2"
+  },
+  "dependencies": {
+    "@phosphor-icons/web": "^2.1.2"
+  }
+}
+

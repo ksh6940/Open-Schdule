@@ -1,0 +1,418 @@
+/* ── Apple Design System Tokens (Verified Surface Spec) ── */
+:root {
+  /* Colors */
+  --apple-primary: #0071e3;
+  --apple-primary-hover: #0076df;
+  --apple-primary-pressed: #006edb;
+  --apple-brand: #000000;
+  --apple-canvas: #f5f5f7;
+  --apple-canvas-dark: #000000;
+  --apple-surface: #ffffff;
+  --apple-surface-hover: #f0f0f5;
+  --apple-surface-active: #e8e8ed;
+  --apple-foreground: #1d1d1f;
+  --apple-on-primary: #ffffff;
+  --apple-muted: #6e6e73;
+  --apple-secondary: #515154;
+  --apple-link: #0066cc;
+  --apple-link-on-dark: #2997ff;
+  --apple-border: #e5e5ea;
+  --apple-border-strong: #d1d1d6;
+  --apple-danger: #ff3b30;
+  --apple-success: #34c759;
+  --apple-warning: #ff9500;
+  --apple-purple: #af52de;
+
+  /* Font Families */
+  --font-display: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-text: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", Consolas, "Courier New", monospace;
+  --font-family: var(--font-text);
+
+  /* Radii */
+  --radius-control: 8px;
+  --radius-card: 18px;
+  --radius-docs-card: 18px;
+  --radius-pill: 980px;
+
+  /* Spacing */
+  --space-compact: 8px;
+  --space-control-inline: 15px;
+  --space-pill-block: 11px;
+  --space-pill-inline: 21px;
+  --space-content: 20px;
+
+  /* Liquid Glass (for functional controls/navigation & overlay only) */
+  --liquid-glass-bg: rgba(255, 255, 255, 0.86);
+  --liquid-glass-blur: blur(28px) saturate(190%);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 25px;
+  letter-spacing: -0.374px;
+  background-color: var(--apple-canvas);
+  color: var(--apple-foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* ── Apple Typography Utility Classes ── */
+.text-display-hero {
+  font-family: var(--font-display);
+  font-size: 56px;
+  font-weight: 600;
+  line-height: 60px;
+  letter-spacing: -0.28px;
+}
+
+.text-section {
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 44px;
+}
+
+.text-tile-heading {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 32px;
+  letter-spacing: 0.196px;
+}
+
+.text-body {
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 25px;
+  letter-spacing: -0.374px;
+}
+
+.text-body-small {
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+}
+
+.text-caption {
+  font-family: var(--font-text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+}
+
+/* ── Apple Component Tokens: Buttons ── */
+
+/* marketing-compact (36px height, 8px 15px padding, 14px / 400, #0071e3) */
+.apple-btn-primary,
+.apple-btn-compact {
+  background-color: var(--apple-primary);
+  color: var(--apple-on-primary);
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 8px 15px;
+  height: 36px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  outline: none;
+  white-space: nowrap;
+}
+
+/* marketing-primary (44px height, 11px 21px padding, 17px / 400, #0071e3) */
+.apple-btn-large {
+  background-color: var(--apple-primary);
+  color: var(--apple-on-primary);
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 11px 21px;
+  height: 44px;
+  font-family: var(--font-text);
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: -0.374px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  outline: none;
+  white-space: nowrap;
+}
+
+.apple-btn-primary:hover,
+.apple-btn-compact:hover,
+.apple-btn-large:hover {
+  background-color: var(--apple-primary-hover);
+}
+
+.apple-btn-primary:active,
+.apple-btn-compact:active,
+.apple-btn-large:active {
+  background-color: var(--apple-primary-pressed);
+}
+
+.apple-btn-primary:focus-visible,
+.apple-btn-compact:focus-visible,
+.apple-btn-large:focus-visible {
+  box-shadow: 0 0 0 2px var(--apple-primary);
+}
+
+/* marketing-outline (transparent, #0066cc text & 1px border, rounded 980px) */
+.apple-btn-outline {
+  background-color: transparent;
+  color: var(--apple-link);
+  border: 1px solid var(--apple-link);
+  border-radius: var(--radius-pill);
+  padding: 8px 15px;
+  height: 36px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  outline: none;
+  white-space: nowrap;
+}
+
+.apple-btn-outline.large {
+  padding: 11px 21px;
+  height: 44px;
+  font-size: 17px;
+  letter-spacing: -0.374px;
+}
+
+.apple-btn-outline:hover {
+  background-color: rgba(0, 102, 204, 0.08);
+}
+
+.apple-btn-outline:focus-visible {
+  box-shadow: 0 0 0 2px var(--apple-primary);
+}
+
+.apple-btn-danger {
+  background-color: rgba(255, 59, 48, 0.1);
+  color: var(--apple-danger);
+  border: 1px solid rgba(255, 59, 48, 0.3);
+  border-radius: var(--radius-pill);
+  padding: 8px 15px;
+  height: 36px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  outline: none;
+}
+
+.apple-btn-danger:hover {
+  background-color: var(--apple-danger);
+  color: #ffffff;
+}
+
+/* ── Apple Inputs & Controls (8px radius, brand blue focus ring) ── */
+.apple-input,
+.apple-textarea {
+  width: 100%;
+  background-color: var(--apple-canvas);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-control);
+  padding: 8px 12px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  line-height: 18px;
+  letter-spacing: -0.224px;
+  color: var(--apple-foreground);
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.apple-input:focus,
+.apple-textarea:focus {
+  background-color: var(--apple-surface);
+  border-color: var(--apple-primary);
+  box-shadow: 0 0 0 2px var(--apple-primary);
+}
+
+.apple-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+/* ── Circular Checkbox (Apple Reminders style) ── */
+.apple-checkbox {
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  border: 1.8px solid var(--apple-border-strong);
+  background-color: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+  margin-top: 2px;
+}
+
+.apple-checkbox:hover {
+  border-color: var(--apple-primary);
+}
+
+.apple-checkbox.checked {
+  background-color: var(--apple-primary);
+  border-color: var(--apple-primary);
+}
+
+.apple-checkbox.checked::after {
+  content: '✓';
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.apple-checkbox.in-progress {
+  border-color: var(--apple-warning);
+}
+
+.apple-checkbox.in-progress::after {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background-color: var(--apple-warning);
+}
+
+.apple-checkbox.conditional {
+  border-color: var(--apple-purple);
+  background-color: rgba(175, 82, 222, 0.14);
+}
+
+.apple-checkbox.conditional::after {
+  content: '✓';
+  color: var(--apple-purple);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* ── Status Pills (Caption 12px / 400, 980px radius) ── */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.status-pill.planned {
+  background-color: rgba(110, 110, 115, 0.1);
+  color: var(--apple-muted);
+  border-color: rgba(110, 110, 115, 0.22);
+}
+
+.status-pill.in_progress {
+  background-color: rgba(255, 149, 0, 0.12);
+  color: #c96e00;
+  border-color: rgba(255, 149, 0, 0.28);
+}
+
+.status-pill.done {
+  background-color: rgba(52, 199, 89, 0.12);
+  color: #1f8b3b;
+  border-color: rgba(52, 199, 89, 0.28);
+}
+
+.status-pill.conditional_done {
+  background-color: rgba(175, 82, 222, 0.12);
+  color: var(--apple-purple);
+  border-color: rgba(175, 82, 222, 0.28);
+}
+
+.status-pill.active {
+  box-shadow: 0 0 0 2px var(--apple-primary);
+  font-weight: 600;
+}
+
+/* ── Category Dot & Chip ── */
+.cat-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background-color: var(--apple-canvas);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: -0.12px;
+  color: var(--apple-secondary);
+}
+
+/* ── Custom Scrollbars ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(110, 110, 115, 0.25);
+  border-radius: var(--radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(110, 110, 115, 0.45);
+}
+

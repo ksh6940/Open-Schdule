@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenSchedule - Apple Reminders & Calendar</title>
+  <link rel="stylesheet" href="css/phosphor.css">
+  <link rel="stylesheet" href="css/apple-theme.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- ── 상단 네비게이션 바 (Apple product-gallery-tab 53px) ── -->
+    <header class="top-navbar">
+      <div class="nav-brand">
+        <div class="brand-logo"><i class="ph-bold ph-check"></i></div>
+        <span>OpenSchedule</span>
+      </div>
+
+      <nav class="nav-tabs">
+        <button class="nav-tab-btn active" data-tab="reminders">
+          <i class="ph-bold ph-list-checks"></i> 미리알림 & 캘린더
+        </button>
+        <button class="nav-tab-btn" data-tab="settings">
+          <i class="ph-bold ph-terminal-window"></i> 설정 & CLI 가이드
+        </button>
+      </nav>
+
+      <div class="nav-actions">
+        <button class="apple-btn-outline" id="btn-sync-json" title="schedules/{date}_schedule.json 및 SQLite 동기화">
+          <i class="ph-bold ph-arrows-clockwise"></i> JSON 동기화
+        </button>
+        <button class="apple-btn-compact" id="btn-open-new-todo-modal" title="새 일정 추가 (Ctrl+N)">
+          <i class="ph-bold ph-calendar-plus"></i> 새 일정 추가
+        </button>
+        <span id="connection-status-pill" class="status-pill done">
+          <i class="ph-fill ph-circle"></i> 엔진 연결됨
+        </span>
+      </div>
+    </header>
+
+    <!-- ── 탭 1: 미리알림 & 캘린더 (Apple Reminders 3-Column View) ── -->
+    <main class="main-content" id="tab-reminders">
+      <!-- 좌측 사이드바: 2x2 스마트 카드 & 내 목록 -->
+      <aside class="sidebar-col">
+        <!-- 2x2 스마트 카드 그리드 -->
+        <div class="smart-cards-grid">
+          <!-- 오늘 (Today: Blue) -->
+          <div class="smart-card active" data-filter="today">
+            <div class="smart-card-top">
+              <div class="smart-icon today" id="today-day-icon">14</div>
+              <div class="smart-count" id="count-today">0</div>
+            </div>
+            <div class="smart-label"><i class="ph-bold ph-calendar-blank"></i> 오늘</div>
+          </div>
+
+          <!-- 예정 (Scheduled: Orange) -->
+          <div class="smart-card" data-filter="scheduled">
+            <div class="smart-card-top">
+              <div class="smart-icon scheduled"><i class="ph-bold ph-clock"></i></div>
+              <div class="smart-count" id="count-scheduled">0</div>
+            </div>
+            <div class="smart-label">예정</div>
+          </div>
+
+          <!-- 전체 (All: Secondary Neutral) -->
+          <div class="smart-card" data-filter="all">
+            <div class="smart-card-top">
+              <div class="smart-icon all"><i class="ph-bold ph-tray"></i></div>
+              <div class="smart-count" id="count-all">0</div>
+            </div>
+            <div class="smart-label">전체</div>
+          </div>
+
+          <!-- 완료됨 (Completed: Green) -->
+          <div class="smart-card" data-filter="completed">
+            <div class="smart-card-top">
+              <div class="smart-icon completed"><i class="ph-bold ph-check"></i></div>
+              <div class="smart-count" id="count-completed">0</div>
+            </div>
+            <div class="smart-label">완료됨</div>
+          </div>
+        </div>
+
+        <!-- 내 목록 (Categories) -->
+        <div class="lists-header">
+          <span>내 목록</span>
+          <button class="add-list-btn" id="btn-show-add-list">
+            <i class="ph-bold ph-plus"></i> 목록 추가
+          </button>
+        </div>
+
+        <div class="lists-container" id="category-lists">
+          <!-- JS 렌더링 -->
+        </div>
+      </aside>
+
+      <!-- 중앙 메인 영역 ([투두리스트 / 캘린더 뷰] 모드 전환 지원) -->
+      <section class="center-col">
+        <div class="center-header">
+          <div class="center-title-group">
+            <h1 class="center-title" id="view-title">오늘</h1>
+            <span class="center-count-subtitle" id="view-count-subtitle">0개</span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <!-- [투두리스트 / 캘린더 뷰] 모드 전환 스위치 -->
+            <div class="view-mode-switch" id="view-mode-switch">
+              <button class="view-mode-btn active" data-mode="list">
+                <i class="ph-bold ph-check-square-offset"></i> 투두리스트
+              </button>
+              <button class="view-mode-btn" data-mode="calendar">
+                <i class="ph-bold ph-calendar"></i> 캘린더 뷰
+              </button>
+            </div>
+
+            <div class="search-input-wrapper">
+              <i class="ph-bold ph-magnifying-glass search-icon"></i>
+              <input type="text" class="apple-input center-search-input" id="search-input" placeholder="일정 검색...">
+            </div>
+          </div>
+        </div>
+
+        <!-- 캘린더 뷰 영역 (캘린더 모드 선택 시 표시) -->
+        <div class="calendar-view-box hidden" id="calendar-view-box">
+          <div class="calendar-nav-bar">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <button class="apple-btn-outline" id="btn-cal-prev" style="padding: 4px 12px; height: 30px;">
+                <i class="ph-bold ph-caret-left"></i> 이전 달
+              </button>
+              <button class="apple-btn-outline" id="btn-cal-today" style="padding: 4px 12px; height: 30px;">
+                오늘
+              </button>
+              <button class="apple-btn-outline" id="btn-cal-next" style="padding: 4px 12px; height: 30px;">
+                다음 달 <i class="ph-bold ph-caret-right"></i>
+              </button>
+            </div>
+            <span class="calendar-month-label" id="cal-month-label">2026년 11월</span>
+            <span class="cal-json-badge" id="cal-json-badge">schedules/YYYY-MM-DD_schedule.json</span>
+          </div>
+
+          <div class="calendar-weekdays-grid">
+            <span style="color: var(--apple-danger);">일</span>
+            <span>월</span>
+            <span>화</span>
+            <span>수</span>
+            <span>목</span>
+            <span>금</span>
+            <span style="color: var(--apple-link);">토</span>
+          </div>
+
+          <div class="calendar-days-grid" id="calendar-days-grid">
+            <!-- JS 월간 달력 셀 렌더링 -->
+          </div>
+        </div>
+
+        <!-- 인라인 일정 빠른 등록 바 (날짜/시간/목록 즉시 지정 지원) -->
+        <div class="inline-quick-add">
+          <div class="quick-add-main-row">
+            <div class="quick-add-circle"><i class="ph-bold ph-plus"></i></div>
+            <input type="text" class="quick-add-input" id="quick-add-input" placeholder="새로운 일정 제목 입력 (Enter로 즉시 추가)...">
+            <button class="apple-btn-compact" id="btn-quick-add">
+              <i class="ph-bold ph-plus"></i> 일정 추가
+            </button>
+          </div>
+          <div class="quick-add-options-row">
+            <label class="quick-opt-item" title="기한 날짜">
+              <i class="ph-bold ph-calendar-blank"></i>
+              <input type="date" class="quick-opt-input" id="quick-add-date">
+            </label>
+            <label class="quick-opt-item" title="기한 시간 (선택)">
+              <i class="ph-bold ph-clock"></i>
+              <input type="time" class="quick-opt-input" id="quick-add-time">
+            </label>
+            <label class="quick-opt-item" title="카테고리 목록">
+              <i class="ph-bold ph-tag"></i>
+              <select class="quick-opt-input" id="quick-add-category">
+                <option value="">미분류</option>
+              </select>
+            </label>
+            <input type="text" class="quick-opt-memo" id="quick-add-memo" placeholder="메모 (선택)...">
+          </div>
+        </div>
+
+        <!-- 4대 세부 상태 필터 칩 -->
+        <div class="status-filters-row" id="status-filter-pills">
+          <div class="status-filters-left">
+            <span class="status-pill planned" data-status="planned"><i class="ph ph-circle"></i> 진행예정</span>
+            <span class="status-pill in_progress" data-status="in_progress"><i class="ph ph-circle-half"></i> 진행중</span>
+            <span class="status-pill conditional_done" data-status="conditional_done"><i class="ph-bold ph-check-circle"></i> 조건부완료</span>
+            <span class="status-pill done" data-status="done"><i class="ph-fill ph-check-circle"></i> 완료</span>
+          </div>
+          <span class="text-caption" style="color: var(--apple-muted);" id="schedule-file-indicator">
+            <i class="ph ph-file-js"></i> schedules/{date}_schedule.json 자동 저장
+          </span>
+        </div>
+
+        <!-- 할 일 체크리스트 스크롤 영역 -->
+        <div class="checklist-scroll" id="todo-checklist">
+          <!-- JS 렌더링 -->
+        </div>
+      </section>
+
+      <!-- 우측 세부사항 인스펙터 패널 -->
+      <aside class="inspector-col hidden" id="inspector-panel">
+        <div class="inspector-header">
+          <h3 class="inspector-title" id="inspector-title-label">일정 세부사항</h3>
+          <button class="inspector-close-btn" id="btn-close-inspector" title="닫기">
+            <i class="ph-bold ph-x"></i>
+          </button>
+        </div>
+
+        <div class="inspector-section">
+          <label class="inspector-label">제목</label>
+          <input type="text" class="apple-input" id="inspect-title" placeholder="일정 제목">
+        </div>
+
+        <div class="inspector-section">
+          <label class="inspector-label">메모</label>
+          <textarea class="apple-textarea" id="inspect-memo" placeholder="메모 추가..."></textarea>
+        </div>
+
+        <div class="inspector-section">
+          <label class="inspector-label">기한 일자</label>
+          <div class="quick-chips-row" style="margin-bottom: 6px;">
+            <button class="quick-chip" id="chip-date-today">오늘</button>
+            <button class="quick-chip" id="chip-date-tomorrow">내일</button>
+            <button class="quick-chip" id="chip-date-nextweek">다음 주</button>
+          </div>
+          <input type="date" class="apple-input" id="inspect-date">
+        </div>
+
+        <div class="inspector-section">
+          <label class="inspector-label">기한 시간</label>
+          <div class="quick-chips-row" style="margin-bottom: 6px;">
+            <button class="quick-chip" id="chip-time-09">09:00</button>
+            <button class="quick-chip" id="chip-time-13">13:00</button>
+            <button class="quick-chip" id="chip-time-18">18:00</button>
+            <button class="quick-chip" id="chip-time-clear">시간 삭제</button>
+          </div>
+          <input type="time" class="apple-input" id="inspect-time">
+        </div>
+
+        <div class="inspector-section">
+          <label class="inspector-label">목록 (카테고리)</label>
+          <select class="apple-input" id="inspect-category">
+            <option value="">미분류</option>
+          </select>
+        </div>
+
+        <div class="inspector-section">
+          <label class="inspector-label">진행 상태</label>
+          <select class="apple-input" id="inspect-status">
+            <option value="planned">○ 진행예정</option>
+            <option value="in_progress">◐ 진행중</option>
+            <option value="conditional_done">◑ 조건부완료</option>
+            <option value="done">● 완료</option>
+          </select>
+        </div>
+
+        <div class="inspector-section" id="inspect-condition-box" style="display: none;">
+          <label class="inspector-label" style="color: var(--apple-purple);">조건부 완료 조건</label>
+          <input type="text" class="apple-input" id="inspect-condition" placeholder="예: 상사 승인 후, 검수 통과 시">
+        </div>
+
+        <div style="margin-top: 16px; display: flex; gap: 8px;">
+          <button class="apple-btn-primary" id="btn-save-inspect" style="flex: 1;">
+            <i class="ph-bold ph-floppy-disk"></i> 변경사항 저장
+          </button>
+          <button class="apple-btn-danger" id="btn-delete-inspect" title="삭제">
+            <i class="ph-bold ph-trash"></i> 삭제
+          </button>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ── 탭 2: 설정 & CLI 가이드 ── -->
+    <main class="main-content" id="tab-settings" style="display: none;">
+      <div class="tab-view-container">
+        <!-- 1. 웹캠 상단 핫존 설정 -->
+        <div class="apple-card">
+          <h2 class="card-title">
+            <i class="ph-bold ph-webcam" style="color: var(--apple-primary);"></i> 웹캠 핫존 드롭다운 (Liquid Glass)
+          </h2>
+          <p class="card-subtitle">화면 상단 웹캠 위치로 마우스를 가져가면 오늘의 투두 카드가 슬라이드 다운됩니다.</p>
+
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+              <input type="checkbox" id="setting-hotzone-enabled" checked>
+              <span>상단 웹캠 핫존 자동 열기 활성화</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 2. OpenLab CLI & Claude Code 스타일 대화형 셸 가이드 -->
+        <div class="apple-card">
+          <h2 class="card-title">
+            <i class="ph-bold ph-terminal-window" style="color: var(--apple-primary);"></i> OpenLab CLI & 일자별 JSON + SQLite 동기화
+          </h2>
+          <p class="card-subtitle">
+            일반 터미널에서 <code>openlab start -s</code>로 Claude Code 스타일 CLI를 실행하거나, <code>openlab start -s program</code>으로 본 Electron GUI 앱을 실행할 수 있습니다. 모든 일정은 SQLite(<code>todos.db</code>)와 <code>schedules/{date}_schedule.json</code>에 양방향 실시간 저장됩니다.
+          </p>
+
+          <div class="cli-guide-box">
+            <div class="cli-guide-item">
+              <div class="cli-guide-label">1. 실행 명령어 (CLI 셸 vs Electron GUI 프로그램)</div>
+              <pre class="cli-code-block">openlab start -s
+openlab start -s program</pre>
+            </div>
+            <div class="cli-guide-item">
+              <div class="cli-guide-label">2. 새 일정 추가 (날짜별 {date}_schedule.json 자동 생성 및 갱신)</div>
+              <pre class="cli-code-block">openlab start -s add "팀 주간 회의" --date tomorrow --time 14:00 --category 업무 --memo "분기 목표 점검"
+openschedule add "저녁 유산소 운동" -d 오늘 -t "19:00" -c 건강</pre>
+            </div>
+            <div class="cli-guide-item">
+              <div class="cli-guide-label">3. 일정 조회 / 상태 변경 / 수정 / 삭제</div>
+              <pre class="cli-code-block">openlab start -s list --filter today
+openlab start -s done 1
+openlab start -s edit 1 --title "수정된 제목" --date 2026-11-12
+openlab start -s delete 1</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ── 새 일정 추가 모달 (상세 일정 생성) ── -->
+    <div class="modal-overlay hidden" id="modal-add-todo">
+      <div class="modal-card" style="width: 480px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <h3 class="text-tile-heading" style="font-size: 22px; font-weight: 600; display: flex; align-items: center; gap: 8px; color: var(--apple-foreground);">
+            <i class="ph-bold ph-calendar-plus" style="color: var(--apple-primary);"></i> 새 일정 추가
+          </h3>
+          <button class="inspector-close-btn" id="btn-close-todo-modal" title="닫기">
+            <i class="ph-bold ph-x"></i>
+          </button>
+        </div>
+
+        <div class="inspector-section" style="margin-bottom: 4px;">
+          <label class="inspector-label">일정 제목 *</label>
+          <input type="text" class="apple-input" id="modal-todo-title" placeholder="무엇을 해야 하나요? (예: 프로젝트 기획안 발표)">
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="inspector-section" style="margin-bottom: 4px;">
+            <label class="inspector-label">기한 날짜</label>
+            <div class="quick-chips-row" style="margin-bottom: 4px;">
+              <button type="button" class="quick-chip" data-modal-date="0">오늘</button>
+              <button type="button" class="quick-chip" data-modal-date="1">내일</button>
+              <button type="button" class="quick-chip" data-modal-date="7">다음 주</button>
+            </div>
+            <input type="date" class="apple-input" id="modal-todo-date">
+          </div>
+
+          <div class="inspector-section" style="margin-bottom: 4px;">
+            <label class="inspector-label">기한 시간 (선택)</label>
+            <div class="quick-chips-row" style="margin-bottom: 4px;">
+              <button type="button" class="quick-chip" data-modal-time="09:00">09:00</button>
+              <button type="button" class="quick-chip" data-modal-time="14:00">14:00</button>
+              <button type="button" class="quick-chip" data-modal-time="18:00">18:00</button>
+              <button type="button" class="quick-chip" data-modal-time="">없음</button>
+            </div>
+            <input type="time" class="apple-input" id="modal-todo-time">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="inspector-section" style="margin-bottom: 4px;">
+            <label class="inspector-label">목록 (카테고리)</label>
+            <select class="apple-input" id="modal-todo-category">
+              <option value="">미분류</option>
+            </select>
+          </div>
+
+          <div class="inspector-section" style="margin-bottom: 4px;">
+            <label class="inspector-label">초기 상태</label>
+            <select class="apple-input" id="modal-todo-status">
+              <option value="planned">○ 진행예정</option>
+              <option value="in_progress">◐ 진행중</option>
+              <option value="conditional_done">◑ 조건부완료</option>
+              <option value="done">● 완료</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="inspector-section" style="margin-bottom: 4px;">
+          <label class="inspector-label">메모</label>
+          <textarea class="apple-textarea" id="modal-todo-memo" placeholder="관련 링크, 준비물, 세부 내용을 적어주세요..." style="min-height: 68px;"></textarea>
+        </div>
+
+        <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px;">
+          <button class="apple-btn-outline large" id="btn-cancel-todo-modal">취소</button>
+          <button class="apple-btn-large" id="btn-confirm-todo-modal">
+            <i class="ph-bold ph-check"></i> 일정 등록
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 카테고리 추가 모달 ── -->
+    <div class="modal-overlay hidden" id="modal-add-category">
+      <div class="modal-card">
+        <h3 style="font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+          <i class="ph-bold ph-folder-plus"></i> 새 목록 만들기
+        </h3>
+        <input type="text" class="apple-input" id="new-cat-name" placeholder="목록 이름">
+
+        <div>
+          <label class="inspector-label" style="display: block; margin-bottom: 6px;">색상 선택</label>
+          <div class="color-dots-row">
+            <div class="color-dot-pick selected" data-color="0x0071E3" style="background-color: #0071e3;"></div>
+            <div class="color-dot-pick" data-color="0x34C759" style="background-color: #34c759;"></div>
+            <div class="color-dot-pick" data-color="0xFF9500" style="background-color: #ff9500;"></div>
+            <div class="color-dot-pick" data-color="0xFF3B30" style="background-color: #ff3b30;"></div>
+            <div class="color-dot-pick" data-color="0xAF52DE" style="background-color: #af52de;"></div>
+            <div class="color-dot-pick" data-color="0x30B0C7" style="background-color: #30b0c7;"></div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;">
+          <button class="apple-btn-outline" id="btn-cancel-add-cat">취소</button>
+          <button class="apple-btn-primary" id="btn-confirm-add-cat">
+            <i class="ph-bold ph-plus"></i> 추가
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
+
