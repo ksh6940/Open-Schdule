@@ -35,31 +35,51 @@ fn launch_electron_program() -> anyhow::Result<()> {
     let root = find_workspace_root();
     let main_js = root.join("electron").join("main.js");
 
-    let electron_bin = if cfg!(windows) {
-        let local_exe = root
-            .join("node_modules")
-            .join("electron")
-            .join("dist")
-            .join("electron.exe");
-        if local_exe.exists() {
-            Some(local_exe)
+    let dist_exe = root
+        .join("node_modules")
+        .join("electron")
+        .join("dist")
+        .join(if cfg!(windows) {
+            "electron.exe"
         } else {
-            None
+            "electron"
+        });
+
+    // 만약 electron 바이너리가 아직 압축 해제되지 않았다면 install.js 자동 실행
+    if !dist_exe.exists() {
+        let install_js = root.join("node_modules").join("electron").join("install.js");
+        if install_js.exists() {
+            println!("⚙️ Electron 런타임 바이너리를 준비 중입니다...");
+            let _ = Command::new("node")
+                .arg(&install_js)
+                .current_dir(&root)
+                .status();
         }
-    } else {
-        let local_bin = root.join("node_modules").join(".bin").join("electron");
-        if local_bin.exists() {
-            Some(local_bin)
-        } else {
-            None
-        }
-    };
+    }
 
     println!("🚀 OpenLab Schedule (Electron GUI 프로그램)을 실행합니다...");
 
-    if let Some(exe) = electron_bin {
-        Command::new(exe)
+    if dist_exe.exists() {
+        Command::new(&dist_exe)
             .arg(&main_js)
+            .current_dir(&root)
+            .spawn()?;
+        return Ok(());
+    }
+
+    let electron_cli_js = root.join("node_modules").join("electron").join("cli.js");
+    if electron_cli_js.exists() {
+        Command::new("node")
+            .arg(&electron_cli_js)
+            .arg(&main_js)
+            .current_dir(&root)
+            .spawn()?;
+        return Ok(());
+    }
+
+    if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/C", "npx", "electron", "electron/main.js"])
             .current_dir(&root)
             .spawn()?;
     } else {
