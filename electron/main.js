@@ -1,4 +1,19 @@
-const { app, BrowserWindow, screen, ipcMain, Tray, Menu } = require('electron');
+const electronModule = require('electron');
+if (typeof electronModule === 'string') {
+  // IDE 통합 터미널 등에서 ELECTRON_RUN_AS_NODE=1 환경변수가 상속된 경우 제거 후 재기동
+  const { spawn } = require('child_process');
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const child = spawn(electronModule, process.argv.slice(1), {
+    env,
+     detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  process.exit(0);
+}
+
+const { app, BrowserWindow, screen, ipcMain, Tray, Menu } = electronModule;
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');

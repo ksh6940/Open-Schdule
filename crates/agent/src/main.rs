@@ -63,6 +63,7 @@ fn launch_electron_program() -> anyhow::Result<()> {
         Command::new(&dist_exe)
             .arg(&main_js)
             .current_dir(&root)
+            .env_remove("ELECTRON_RUN_AS_NODE")
             .spawn()?;
         return Ok(());
     }
@@ -73,6 +74,7 @@ fn launch_electron_program() -> anyhow::Result<()> {
             .arg(&electron_cli_js)
             .arg(&main_js)
             .current_dir(&root)
+            .env_remove("ELECTRON_RUN_AS_NODE")
             .spawn()?;
         return Ok(());
     }
@@ -81,11 +83,13 @@ fn launch_electron_program() -> anyhow::Result<()> {
         Command::new("cmd")
             .args(["/C", "npx", "electron", "electron/main.js"])
             .current_dir(&root)
+            .env_remove("ELECTRON_RUN_AS_NODE")
             .spawn()?;
     } else {
         Command::new("npx")
             .args(["electron", "electron/main.js"])
             .current_dir(&root)
+            .env_remove("ELECTRON_RUN_AS_NODE")
             .spawn()?;
     }
 
