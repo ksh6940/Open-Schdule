@@ -1,13 +1,15 @@
-/* ── Main App Layout (Apple Design System) ── */
+/* ── Main App Layout (Frameless Apple Design System v1.0) ── */
 #app-container {
   display: flex;
   flex-direction: column;
   height: 100vh;
   width: 100vw;
   background-color: var(--apple-canvas);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  overflow: hidden;
 }
 
-/* ── Top Navigation Bar (product-gallery-tab: 53px height, 17px/400) ── */
+/* ── Top Navigation Bar (Frameless Drag Bar + product-gallery-tab: 53px height) ── */
 .top-navbar {
   height: 53px;
   background-color: var(--liquid-glass-bg);
@@ -17,15 +19,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  padding: 0 14px 0 22px;
   z-index: 10;
   flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
 }
 
 .nav-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   font-family: var(--font-display);
   font-size: 17px;
   font-weight: 600;
@@ -46,6 +53,16 @@
   font-weight: 700;
 }
 
+.version-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--apple-primary);
+  background-color: rgba(0, 113, 227, 0.1);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+}
+
 /* Product Gallery Tab Style (height 53px, 17px/400, #1d1d1f) */
 .nav-tabs {
   display: flex;
@@ -61,7 +78,7 @@
   height: 53px;
   padding: 0 16px;
   font-family: var(--font-text);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 400;
   letter-spacing: -0.374px;
   color: var(--apple-muted);
@@ -83,10 +100,51 @@
   border-bottom-color: var(--apple-foreground);
 }
 
+.nav-right-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .nav-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Custom Frameless Window Controls */
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--apple-border);
+}
+
+.win-ctrl-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--apple-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  outline: none;
+}
+
+.win-ctrl-btn:hover {
+  background-color: var(--apple-surface-active);
+  color: var(--apple-foreground);
+}
+
+.win-ctrl-btn.close:hover {
+  background-color: var(--apple-danger);
+  color: #ffffff;
 }
 
 /* ── Main Content Area (Content Spacing: 20px) ── */
@@ -119,7 +177,7 @@
   display: flex;
   flex-direction: column;
   padding: 24px 28px;
-  min-width: 420px;
+  min-width: 440px;
   overflow: hidden;
 }
 
@@ -290,7 +348,34 @@
   text-decoration: underline;
 }
 
-/* ── Center Header (Section 40px/600 & Mode Switcher) ── */
+.sidebar-footer-hints {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--apple-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--apple-muted);
+}
+
+.hint-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hint-row kbd {
+  background-color: var(--apple-canvas);
+  border: 1px solid var(--apple-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--apple-secondary);
+}
+
+/* ── Center Header (Section 40px/600, Progress Bar & Mode Switcher) ── */
 .center-header {
   display: flex;
   align-items: center;
@@ -302,16 +387,15 @@
 
 .center-title-group {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
 }
 
-/* Apple Section Typography: 40px / 600 / 44px */
 .center-title {
   font-family: var(--font-display);
-  font-size: 40px;
+  font-size: 38px;
   font-weight: 600;
-  line-height: 44px;
+  line-height: 42px;
   color: var(--apple-foreground);
 }
 
@@ -320,6 +404,37 @@
   font-size: 20px;
   color: var(--apple-muted);
   font-weight: 400;
+}
+
+.progress-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--apple-canvas);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-pill);
+  padding: 4px 11px;
+  font-size: 12px;
+  color: var(--apple-secondary);
+}
+
+.progress-mini-bar {
+  width: 54px;
+  height: 6px;
+  background-color: var(--apple-border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.progress-mini-fill {
+  height: 100%;
+  background-color: var(--apple-primary);
+  border-radius: var(--radius-pill);
+  transition: width 0.25s ease, background-color 0.25s ease;
+}
+
+.progress-mini-fill.complete {
+  background-color: var(--apple-success);
 }
 
 /* View Mode Segmented Switch ([투두리스트 | 캘린더 뷰]) */
@@ -435,7 +550,7 @@
   background-color: var(--apple-surface);
   border: 1px solid var(--apple-border);
   border-radius: var(--radius-control);
-  min-height: 62px;
+  min-height: 60px;
   padding: 6px 8px;
   cursor: pointer;
   display: flex;
@@ -512,18 +627,6 @@
   color: var(--apple-muted);
 }
 
-.cal-selected-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  background-color: var(--apple-surface);
-  border-radius: var(--radius-control);
-  border: 1px solid var(--apple-border);
-  font-size: 13px;
-  color: var(--apple-secondary);
-}
-
 .cal-json-badge {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -565,6 +668,29 @@
   flex-wrap: wrap;
   gap: 8px;
   padding-left: 30px;
+}
+
+.inline-quick-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mini-chip {
+  background-color: var(--apple-surface);
+  border: 1px solid var(--apple-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  font-size: 11.5px;
+  color: var(--apple-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.mini-chip:hover {
+  background-color: rgba(0, 113, 227, 0.1);
+  color: var(--apple-primary);
+  border-color: var(--apple-primary);
 }
 
 .quick-opt-item {
@@ -667,7 +793,7 @@
 
 .todo-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   padding: 12px 14px;
   border-radius: 12px;
@@ -692,6 +818,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .todo-row-title-line {
@@ -746,16 +873,44 @@
   font-weight: 600;
 }
 
-.todo-info-btn {
-  color: var(--apple-muted);
-  font-size: 16px;
-  padding: 2px 6px;
-  border-radius: 50%;
-  transition: color 0.15s ease;
+/* Hover Row Actions */
+.todo-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.todo-row:hover .todo-info-btn {
+.row-action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--apple-muted);
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.12s ease;
+  outline: none;
+}
+
+.todo-row:hover .row-action-btn {
+  opacity: 1;
+}
+
+.row-action-btn:hover {
+  background-color: var(--apple-surface);
+  border-color: var(--apple-border);
   color: var(--apple-primary);
+}
+
+.row-action-btn.delete:hover {
+  color: var(--apple-danger);
+  border-color: rgba(255, 59, 48, 0.3);
+  background-color: rgba(255, 59, 48, 0.08);
 }
 
 /* ── Inspector Panel ── */
@@ -874,7 +1029,7 @@
   box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--apple-primary);
 }
 
-/* ── Settings & CLI Guide Tab (hig-reference-card: #ffffff, rounded 18px) ── */
+/* ── Settings & CLI Guide Tab ── */
 .tab-view-container {
   flex: 1;
   display: flex;
@@ -891,7 +1046,6 @@
   padding: 24px 28px;
 }
 
-/* Tile Heading: 28px / 400 / 32px */
 .card-title {
   font-family: var(--font-display);
   font-size: 28px;
@@ -945,3 +1099,35 @@
   user-select: all;
 }
 
+/* ── Apple Liquid Glass Floating Toast ── */
+.apple-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(29, 29, 31, 0.88);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  color: #ffffff;
+  border-radius: var(--radius-pill);
+  padding: 10px 20px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 999;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.apple-toast i {
+  color: var(--apple-success);
+  font-size: 17px;
+}
+
+.apple-toast.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(10px);
+}

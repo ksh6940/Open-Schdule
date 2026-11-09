@@ -6,7 +6,7 @@ if (typeof electronModule === 'string') {
   delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn(electronModule, process.argv.slice(1), {
     env,
-     detached: true,
+    detached: true,
     stdio: 'ignore',
   });
   child.unref();
@@ -65,11 +65,15 @@ function ensureRustEngine() {
     }
   }
 
+  const execDir = path.dirname(process.execPath);
   const candidates = [
-    path.join(__dirname, '..', 'target', 'debug', 'openschedule-agent.exe'),
     path.join(__dirname, '..', 'target', 'release', 'openschedule-agent.exe'),
-    path.join(__dirname, '..', 'target', 'debug', 'openlab.exe'),
     path.join(__dirname, '..', 'target', 'release', 'openlab.exe'),
+    path.join(__dirname, '..', 'target', 'debug', 'openschedule-agent.exe'),
+    path.join(__dirname, '..', 'target', 'debug', 'openlab.exe'),
+    path.join(execDir, 'openschedule-agent.exe'),
+    path.join(execDir, 'openlab.exe'),
+    path.join(process.resourcesPath || '', 'openschedule-agent.exe'),
   ];
 
   const exePath = candidates.find(p => fs.existsSync(p));
@@ -82,7 +86,7 @@ function ensureRustEngine() {
     });
   } else {
     console.log('[Rust Engine] Binary not found, spawning via cargo...');
-    rustProcess = spawn('cargo', ['run', '-p', 'openschedule-agent', '--', '--headless'], {
+    rustProcess = spawn('cargo', ['run', '--release', '-p', 'openschedule-agent', '--', '--headless'], {
       cwd: path.join(__dirname, '..'),
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -105,7 +109,6 @@ function ensureRustEngine() {
     });
   }
 
-  // 에이전트 기동 후 파일 생성 대기 및 렌더러에 알림
   let checkCount = 0;
   const pollInterval = setInterval(() => {
     checkCount++;
@@ -121,7 +124,7 @@ function ensureRustEngine() {
       clearInterval(pollInterval);
       console.warn('[Rust Engine] Timeout waiting for agent.json to be created.');
     }
-  }, 300);
+  }, 250);
 }
 
 function notifyWindowsAgentReady() {
@@ -135,14 +138,18 @@ function notifyWindowsAgentReady() {
   }
 }
 
-// 1. 메인 관리 앱 윈도우 (Apple Design System)
+// 1. 메인 관리 앱 윈도우 (Frameless + 메뉴바 제거 + Apple Design System)
 function createMainWindow() {
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 760,
-    minWidth: 900,
-    minHeight: 580,
+    width: 1200,
+    height: 780,
+    minWidth: 920,
+    minHeight: 600,
     title: 'OpenSchedule',
+    frame: false,
+    autoHideMenuBar: true,
     backgroundColor: '#f5f5f7',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -152,7 +159,20 @@ function createMainWindow() {
     },
   });
 
+  mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  mainWindow.on('maximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-maximized', true);
+    }
+  });
+
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-maximized', false);
+    }
+  });
 
   mainWindow.webContents.on('did-finish-load', () => {
     const info = readAgentInfo();
@@ -283,7 +303,7 @@ function setupTray() {
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule (Apple Reminders)');
+    tray.setToolTip('OpenSchedule v1.0');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {
@@ -296,13 +316,35 @@ function setupTray() {
   }
 }
 
-// IPC 메시지 처리
+// IPC 메시지 처리 (에이전트 정보 & 커스텀 프레임리스 윈도우 컨트롤)
 ipcMain.on('get-agent-info-sync', (event) => {
   event.returnValue = readAgentInfo();
 });
 
 ipcMain.handle('get-agent-info', () => {
   return readAgentInfo();
+});
+
+ipcMain.on('window-minimize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.minimize();
+  }
+});
+
+ipcMain.on('window-maximize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  }
+});
+
+ipcMain.on('window-close', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  }
 });
 
 ipcMain.on('open-manager', () => {
@@ -395,4 +437,3 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-

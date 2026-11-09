@@ -1,28 +1,35 @@
 {
-  "name": "openschdule",
+  "name": "openschedule",
   "version": "1.0.0",
-  "description": "OpenSchedule - Apple Reminders 데스크톱 앱 & 웹캠 핫존 드롭다운 & AI 연동 CLI",
+  "description": "OpenSchedule v1.0 - Apple Design System 데스크톱 일정/투두 프로그램, 웹캠 핫존 드롭다운 & Claude Code 스타일 AI 연동 CLI",
   "main": "electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ksh6940/Open-Schdule.git"
+  },
   "bin": {
     "openschedule": "./cli.js",
     "openlab": "./cli.js"
   },
   "scripts": {
     "start": "electron electron/main.js",
-    "engine": "cargo run -p openschedule-agent -- --headless",
+    "engine": "cargo run --release -p openschedule-agent -- --headless",
+    "build:exe": "cargo build --release --workspace",
     "cli": "node cli.js",
     "todo": "node cli.js"
   },
   "keywords": [
     "schedule",
     "todo",
+    "calendar",
     "reminders",
     "cli",
     "electron",
-    "rust"
+    "rust",
+    "sqlite"
   ],
-  "author": "",
-  "license": "MIT",
+  "author": "ksh6940",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "devDependencies": {
     "electron": "^44.7.2"
@@ -31,4 +38,3 @@
     "@phosphor-icons/web": "^2.1.2"
   }
 }
-

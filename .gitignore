@@ -2,6 +2,6 @@
 /target_agent
 /target_mgr
 /node_modules
+/dist
 *.pdb
 *.log
-

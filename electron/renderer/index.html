@@ -3,21 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenSchedule - Apple Reminders & Calendar</title>
+  <title>OpenSchedule v1.0</title>
   <link rel="stylesheet" href="css/phosphor.css">
   <link rel="stylesheet" href="css/apple-theme.css">
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
   <div id="app-container">
-    <!-- ── 상단 네비게이션 바 (Apple product-gallery-tab 53px) ── -->
-    <header class="top-navbar">
+    <!-- ── 커스텀 프레임리스 상단 네비게이션 바 (드래그 이동 & 윈도우 컨트롤 통합) ── -->
+    <header class="top-navbar" id="frameless-titlebar">
       <div class="nav-brand">
         <div class="brand-logo"><i class="ph-bold ph-check"></i></div>
         <span>OpenSchedule</span>
+        <span class="version-badge">v1.0</span>
       </div>
 
-      <nav class="nav-tabs">
+      <nav class="nav-tabs no-drag">
         <button class="nav-tab-btn active" data-tab="reminders">
           <i class="ph-bold ph-list-checks"></i> 미리알림 & 캘린더
         </button>
@@ -26,16 +27,30 @@
         </button>
       </nav>
 
-      <div class="nav-actions">
-        <button class="apple-btn-outline" id="btn-sync-json" title="schedules/{date}_schedule.json 및 SQLite 동기화">
-          <i class="ph-bold ph-arrows-clockwise"></i> JSON 동기화
-        </button>
-        <button class="apple-btn-compact" id="btn-open-new-todo-modal" title="새 일정 추가 (Ctrl+N)">
-          <i class="ph-bold ph-calendar-plus"></i> 새 일정 추가
-        </button>
-        <span id="connection-status-pill" class="status-pill done">
-          <i class="ph-fill ph-circle"></i> 엔진 연결됨
-        </span>
+      <div class="nav-right-group no-drag">
+        <div class="nav-actions">
+          <button class="apple-btn-outline" id="btn-sync-json" title="schedules/{date}_schedule.json 및 SQLite 동기화 (Ctrl+S)">
+            <i class="ph-bold ph-arrows-clockwise"></i> 동기화
+          </button>
+          <button class="apple-btn-compact" id="btn-open-new-todo-modal" title="새 일정 추가 (Ctrl+N)">
+            <i class="ph-bold ph-calendar-plus"></i> 새 일정
+          </button>
+          <span id="connection-status-pill" class="status-pill done" title="Rust 로컬 엔진 연결 상태">
+            <i class="ph-fill ph-circle"></i> 연결됨
+          </span>
+        </div>
+
+        <div class="window-controls">
+          <button class="win-ctrl-btn" id="btn-win-min" title="최소화">
+            <i class="ph-bold ph-minus"></i>
+          </button>
+          <button class="win-ctrl-btn" id="btn-win-max" title="최대화 / 복원">
+            <i class="ph-bold ph-corners-out" id="icon-win-max"></i>
+          </button>
+          <button class="win-ctrl-btn close" id="btn-win-close" title="닫기">
+            <i class="ph-bold ph-x"></i>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -93,6 +108,13 @@
         <div class="lists-container" id="category-lists">
           <!-- JS 렌더링 -->
         </div>
+
+        <!-- 하단 단축키 힌트 -->
+        <div class="sidebar-footer-hints">
+          <div class="hint-row"><kbd>Ctrl+N</kbd> <span>새 일정</span></div>
+          <div class="hint-row"><kbd>Ctrl+1/2</kbd> <span>뷰 전환</span></div>
+          <div class="hint-row"><kbd>/</kbd> <span>빠른 검색</span></div>
+        </div>
       </aside>
 
       <!-- 중앙 메인 영역 ([투두리스트 / 캘린더 뷰] 모드 전환 지원) -->
@@ -101,22 +123,26 @@
           <div class="center-title-group">
             <h1 class="center-title" id="view-title">오늘</h1>
             <span class="center-count-subtitle" id="view-count-subtitle">0개</span>
+            <div class="progress-summary-pill" id="view-progress-pill" title="현재 목록 완료 달성률">
+              <div class="progress-mini-bar"><div class="progress-mini-fill" id="view-progress-fill" style="width: 0%;"></div></div>
+              <span id="view-progress-text">0% 완료</span>
+            </div>
           </div>
 
           <div style="display: flex; align-items: center; gap: 10px;">
             <!-- [투두리스트 / 캘린더 뷰] 모드 전환 스위치 -->
             <div class="view-mode-switch" id="view-mode-switch">
-              <button class="view-mode-btn active" data-mode="list">
+              <button class="view-mode-btn active" data-mode="list" title="투두리스트 뷰 (Ctrl+1)">
                 <i class="ph-bold ph-check-square-offset"></i> 투두리스트
               </button>
-              <button class="view-mode-btn" data-mode="calendar">
+              <button class="view-mode-btn" data-mode="calendar" title="월간 캘린더 뷰 (Ctrl+2)">
                 <i class="ph-bold ph-calendar"></i> 캘린더 뷰
               </button>
             </div>
 
             <div class="search-input-wrapper">
               <i class="ph-bold ph-magnifying-glass search-icon"></i>
-              <input type="text" class="apple-input center-search-input" id="search-input" placeholder="일정 검색...">
+              <input type="text" class="apple-input center-search-input" id="search-input" placeholder="일정 검색 (/)...">
             </div>
           </div>
         </div>
@@ -124,7 +150,7 @@
         <!-- 캘린더 뷰 영역 (캘린더 모드 선택 시 표시) -->
         <div class="calendar-view-box hidden" id="calendar-view-box">
           <div class="calendar-nav-bar">
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
               <button class="apple-btn-outline" id="btn-cal-prev" style="padding: 4px 12px; height: 30px;">
                 <i class="ph-bold ph-caret-left"></i> 이전 달
               </button>
@@ -136,7 +162,7 @@
               </button>
             </div>
             <span class="calendar-month-label" id="cal-month-label">2026년 11월</span>
-            <span class="cal-json-badge" id="cal-json-badge">schedules/YYYY-MM-DD_schedule.json</span>
+            <span class="cal-json-badge" id="cal-json-badge" title="선택한 날짜의 로컬 JSON 파일">schedules/YYYY-MM-DD_schedule.json</span>
           </div>
 
           <div class="calendar-weekdays-grid">
@@ -154,13 +180,13 @@
           </div>
         </div>
 
-        <!-- 인라인 일정 빠른 등록 바 (날짜/시간/목록 즉시 지정 지원) -->
+        <!-- 인라인 일정 빠른 등록 바 (원클릭 날짜/시간 칩 + 즉시 지정 지원) -->
         <div class="inline-quick-add">
           <div class="quick-add-main-row">
             <div class="quick-add-circle"><i class="ph-bold ph-plus"></i></div>
-            <input type="text" class="quick-add-input" id="quick-add-input" placeholder="새로운 일정 제목 입력 (Enter로 즉시 추가)...">
+            <input type="text" class="quick-add-input" id="quick-add-input" placeholder="새로운 할 일을 입력하고 Enter를 누르세요...">
             <button class="apple-btn-compact" id="btn-quick-add">
-              <i class="ph-bold ph-plus"></i> 일정 추가
+              <i class="ph-bold ph-plus"></i> 추가
             </button>
           </div>
           <div class="quick-add-options-row">
@@ -168,6 +194,11 @@
               <i class="ph-bold ph-calendar-blank"></i>
               <input type="date" class="quick-opt-input" id="quick-add-date">
             </label>
+            <div class="inline-quick-chips">
+              <button type="button" class="mini-chip" data-inline-date="0">오늘</button>
+              <button type="button" class="mini-chip" data-inline-date="1">내일</button>
+              <button type="button" class="mini-chip" data-inline-date="7">+1주</button>
+            </div>
             <label class="quick-opt-item" title="기한 시간 (선택)">
               <i class="ph-bold ph-clock"></i>
               <input type="time" class="quick-opt-input" id="quick-add-time">
@@ -191,7 +222,7 @@
             <span class="status-pill done" data-status="done"><i class="ph-fill ph-check-circle"></i> 완료</span>
           </div>
           <span class="text-caption" style="color: var(--apple-muted);" id="schedule-file-indicator">
-            <i class="ph ph-file-js"></i> schedules/{date}_schedule.json 자동 저장
+            <i class="ph ph-file-js"></i> schedules/{date}_schedule.json 자동 동기화
           </span>
         </div>
 
@@ -205,7 +236,7 @@
       <aside class="inspector-col hidden" id="inspector-panel">
         <div class="inspector-header">
           <h3 class="inspector-title" id="inspector-title-label">일정 세부사항</h3>
-          <button class="inspector-close-btn" id="btn-close-inspector" title="닫기">
+          <button class="inspector-close-btn" id="btn-close-inspector" title="닫기 (Esc)">
             <i class="ph-bold ph-x"></i>
           </button>
         </div>
@@ -265,7 +296,7 @@
 
         <div style="margin-top: 16px; display: flex; gap: 8px;">
           <button class="apple-btn-primary" id="btn-save-inspect" style="flex: 1;">
-            <i class="ph-bold ph-floppy-disk"></i> 변경사항 저장
+            <i class="ph-bold ph-floppy-disk"></i> 저장 (Ctrl+S)
           </button>
           <button class="apple-btn-danger" id="btn-delete-inspect" title="삭제">
             <i class="ph-bold ph-trash"></i> 삭제
@@ -295,7 +326,7 @@
         <!-- 2. OpenLab CLI & Claude Code 스타일 대화형 셸 가이드 -->
         <div class="apple-card">
           <h2 class="card-title">
-            <i class="ph-bold ph-terminal-window" style="color: var(--apple-primary);"></i> OpenLab CLI & 일자별 JSON + SQLite 동기화
+            <i class="ph-bold ph-terminal-window" style="color: var(--apple-primary);"></i> OpenLab CLI v1.0 & 일자별 JSON + SQLite 동기화
           </h2>
           <p class="card-subtitle">
             일반 터미널에서 <code>openlab start -s</code>로 Claude Code 스타일 CLI를 실행하거나, <code>openlab start -s program</code>으로 본 Electron GUI 앱을 실행할 수 있습니다. 모든 일정은 SQLite(<code>todos.db</code>)와 <code>schedules/{date}_schedule.json</code>에 양방향 실시간 저장됩니다.
@@ -425,10 +456,15 @@ openlab start -s delete 1</pre>
         </div>
       </div>
     </div>
+
+    <!-- ── Apple Liquid Glass 플로팅 토스트 알림 ── -->
+    <div id="apple-toast" class="apple-toast hidden">
+      <i class="ph-fill ph-check-circle" id="apple-toast-icon"></i>
+      <span id="apple-toast-msg">저장되었습니다</span>
+    </div>
   </div>
 
   <script src="js/api.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
-

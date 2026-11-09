@@ -1,4 +1,4 @@
-// Main Application State & Controller (Apple Design System + Calendar/Todo Mode Switch)
+// Main Application State & Controller (Frameless Apple Design System v1.0)
 
 const nowInit = new Date();
 
@@ -23,6 +23,22 @@ const state = {
   newCategoryColor: 0x0071E3,
 };
 
+let toastTimeout = null;
+
+function showToast(message) {
+  const toast = document.getElementById('apple-toast');
+  const msgEl = document.getElementById('apple-toast-msg');
+  if (!toast || !msgEl) return;
+
+  msgEl.textContent = message;
+  toast.classList.remove('hidden');
+
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.add('hidden');
+  }, 2400);
+}
+
 // 로컬 타임존 기준 YYYY-MM-DD 반환 (UTC 오차 방지)
 function getLocalDateStr(offsetDays = 0) {
   const d = new Date();
@@ -35,8 +51,19 @@ function getLocalDateStr(offsetDays = 0) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function addDaysToDateStr(dateStr, days) {
+  const parts = (dateStr || getLocalDateStr(0)).split('-').map(Number);
+  const d = new Date(parts[0], (parts[1] || 1) - 1, parts[2] || 1);
+  d.setDate(d.getDate() + days);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 // ── 초기화 ──
 document.addEventListener('DOMContentLoaded', async () => {
+  setupWindowControls();
   setupNavigation();
   setupViewModeSwitch();
   setupCalendarControls();
@@ -48,6 +75,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupCategoryModal();
   setupSettings();
   setupSyncButton();
+  setupGlobalShortcuts();
 
   // 오늘 날짜 아이콘 번호 설정
   const todayNum = new Date().getDate();
@@ -65,7 +93,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (window.electronAPI) {
     if (window.electronAPI.onAgentReady) {
       window.electronAPI.onAgentReady(async () => {
-        console.log('[App] Received agent-ready event from main process');
         await initEngineConnection();
       });
     }
@@ -78,24 +105,95 @@ document.addEventListener('DOMContentLoaded', async () => {
   setInterval(() => refreshAll(false), 8000);
 });
 
+// ── 프레임리스 윈도우 컨트롤 ──
+function setupWindowControls() {
+  const btnMin = document.getElementById('btn-win-min');
+  const btnMax = document.getElementById('btn-win-max');
+  const btnClose = document.getElementById('btn-win-close');
+  const iconMax = document.getElementById('icon-win-max');
+
+  if (btnMin) {
+    btnMin.addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.minimizeWindow) {
+        window.electronAPI.minimizeWindow();
+      }
+    });
+  }
+
+  if (btnMax) {
+    btnMax.addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.maximizeWindow) {
+        window.electronAPI.maximizeWindow();
+      }
+    });
+  }
+
+  if (btnClose) {
+    btnClose.addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.closeWindow) {
+        window.electronAPI.closeWindow();
+      }
+    });
+  }
+
+  if (window.electronAPI && window.electronAPI.onWindowMaximized && iconMax) {
+    window.electronAPI.onWindowMaximized((isMax) => {
+      iconMax.className = isMax ? 'ph-bold ph-corners-in' : 'ph-bold ph-corners-out';
+    });
+  }
+}
+
+// ── 전역 키보드 단축키 ──
+function setupGlobalShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+    const isTyping = activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select';
+
+    if ((e.ctrlKey || e.metaKey) && e.key === '1') {
+      e.preventDefault();
+      switchViewMode('list');
+    } else if ((e.ctrlKey || e.metaKey) && e.key === '2') {
+      e.preventDefault();
+      switchViewMode('calendar');
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      const inspector = document.getElementById('inspector-panel');
+      if (inspector && !inspector.classList.contains('hidden')) {
+        document.getElementById('btn-save-inspect').click();
+      } else {
+        document.getElementById('btn-sync-json').click();
+      }
+    } else if (!isTyping && e.key === '/') {
+      e.preventDefault();
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) searchInput.focus();
+    } else if (e.key === 'Escape') {
+      const inspector = document.getElementById('inspector-panel');
+      if (inspector && !inspector.classList.contains('hidden')) {
+        document.getElementById('btn-close-inspector').click();
+      }
+    }
+  });
+}
+
 async function initEngineConnection() {
   const pill = document.getElementById('connection-status-pill');
   if (pill) {
     pill.className = 'status-pill in_progress';
-    pill.innerHTML = '<i class="ph-bold ph-spinner"></i> 엔진 연결 중...';
+    pill.innerHTML = '<i class="ph-bold ph-spinner"></i> 연결 중...';
   }
 
   const ready = await api.ensureReady();
   if (ready) {
     if (pill) {
       pill.className = 'status-pill done';
-      pill.innerHTML = '<i class="ph-fill ph-circle"></i> 엔진 연결됨';
+      pill.innerHTML = '<i class="ph-fill ph-circle"></i> 연결됨';
     }
     await refreshAll(true);
   } else {
     if (pill) {
       pill.className = 'status-pill planned';
-      pill.innerHTML = '<i class="ph-bold ph-warning"></i> 연결 대기 중...';
+      pill.innerHTML = '<i class="ph-bold ph-warning"></i> 대기 중';
     }
   }
 }
@@ -168,7 +266,7 @@ function updateScheduleFileIndicator() {
   const activeDate = state.viewMode === 'calendar' ? state.selectedCalendarDate : getLocalDateStr(0);
 
   if (indicator) {
-    indicator.innerHTML = `<i class="ph ph-file-js"></i> schedules/${activeDate}_schedule.json 연동됨`;
+    indicator.innerHTML = `<i class="ph ph-file-js"></i> schedules/${activeDate}_schedule.json 자동 동기화`;
   }
   if (calBadge) {
     calBadge.textContent = `schedules/${state.selectedCalendarDate}_schedule.json`;
@@ -176,28 +274,31 @@ function updateScheduleFileIndicator() {
 }
 
 // ── [투두리스트 / 캘린더 뷰] 모드 전환 ──
-function setupViewModeSwitch() {
+function switchViewMode(mode) {
+  state.viewMode = mode;
   const btns = document.querySelectorAll('#view-mode-switch .view-mode-btn');
   const calBox = document.getElementById('calendar-view-box');
 
+  btns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+
+  if (mode === 'calendar') {
+    calBox.classList.remove('hidden');
+    const quickDate = document.getElementById('quick-add-date');
+    if (quickDate) quickDate.value = state.selectedCalendarDate;
+    renderCalendarGrid();
+  } else {
+    calBox.classList.add('hidden');
+  }
+
+  updateViewTitle();
+  loadTodos();
+}
+
+function setupViewModeSwitch() {
+  const btns = document.querySelectorAll('#view-mode-switch .view-mode-btn');
   btns.forEach(btn => {
     btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode;
-      state.viewMode = mode;
-
-      btns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-
-      if (mode === 'calendar') {
-        calBox.classList.remove('hidden');
-        const quickDate = document.getElementById('quick-add-date');
-        if (quickDate) quickDate.value = state.selectedCalendarDate;
-        renderCalendarGrid();
-      } else {
-        calBox.classList.add('hidden');
-      }
-
-      updateViewTitle();
-      loadTodos();
+      switchViewMode(btn.dataset.mode);
     });
   });
 }
@@ -257,11 +358,10 @@ function renderCalendarGrid() {
   label.textContent = `${year}년 ${month}월`;
 
   const firstDay = new Date(year, month - 1, 1);
-  const startOffset = firstDay.getDay(); // 0 (Sun) .. 6 (Sat)
+  const startOffset = firstDay.getDay();
   const daysInMonth = new Date(year, month, 0).getDate();
   const todayStr = getLocalDateStr(0);
 
-  // 날짜별 일정 맵 구성
   const byDate = {};
   state.allTodosCache.forEach(t => {
     if (!byDate[t.due_date]) byDate[t.due_date] = [];
@@ -325,6 +425,12 @@ function renderCalendarGrid() {
       loadTodos();
     });
 
+    cell.addEventListener('dblclick', () => {
+      state.selectedCalendarDate = dateStr;
+      const btnOpen = document.getElementById('btn-open-new-todo-modal');
+      if (btnOpen) btnOpen.click();
+    });
+
     grid.appendChild(cell);
   }
 }
@@ -337,6 +443,7 @@ function setupSyncButton() {
     try {
       await api.syncJson();
       await refreshAll(true);
+      showToast('SQLite ⇄ schedules/{date}_schedule.json 동기화 완료');
     } catch (e) {
       console.error('Sync failed:', e);
     }
@@ -384,7 +491,6 @@ function selectSmartFilter(filterName) {
   state.currentFilter = filterName;
   state.selectedCategoryId = null;
 
-  // 스마트 카드 클릭 시 투두리스트 뷰로 전환
   if (state.viewMode === 'calendar') {
     state.viewMode = 'list';
     document.querySelectorAll('#view-mode-switch .view-mode-btn').forEach(b => {
@@ -487,7 +593,6 @@ function renderCategories() {
       state.selectedCategoryId = cat.id;
       state.currentFilter = null;
 
-      // 인라인 카테고리 선택기도 동기화
       const quickCat = document.getElementById('quick-add-category');
       if (quickCat) quickCat.value = String(cat.id);
 
@@ -529,6 +634,14 @@ function setupQuickAdd() {
   const memoInput = document.getElementById('quick-add-memo');
   const btn = document.getElementById('btn-quick-add');
 
+  // 인라인 원클릭 날짜 칩 (오늘, 내일, +1주)
+  document.querySelectorAll('[data-inline-date]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const offset = parseInt(chip.dataset.inlineDate, 10) || 0;
+      if (dateInput) dateInput.value = getLocalDateStr(offset);
+    });
+  });
+
   const submit = async () => {
     const title = input.value.trim();
     if (!title) {
@@ -568,9 +681,10 @@ function setupQuickAdd() {
       }
 
       await refreshAll(false);
+      showToast(`"${title}" 일정이 추가되었습니다 (${dueDate})`);
     } catch (err) {
       console.error('Failed to create todo:', err);
-      alert(`일정 추가 실패: ${err.message}`);
+      showToast(`일정 추가 실패: ${err.message}`);
     }
   };
 
@@ -631,7 +745,6 @@ function setupNewTodoModal() {
   if (btnClose) btnClose.addEventListener('click', closeModal);
   if (btnCancel) btnCancel.addEventListener('click', closeModal);
 
-  // Ctrl + N 단축키 지원
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
       e.preventDefault();
@@ -641,7 +754,6 @@ function setupNewTodoModal() {
     }
   });
 
-  // 모달 내 날짜 퀵 칩
   document.querySelectorAll('[data-modal-date]').forEach(chip => {
     chip.addEventListener('click', () => {
       const offset = parseInt(chip.dataset.modalDate, 10) || 0;
@@ -649,7 +761,6 @@ function setupNewTodoModal() {
     });
   });
 
-  // 모달 내 시간 퀵 칩
   document.querySelectorAll('[data-modal-time]').forEach(chip => {
     chip.addEventListener('click', () => {
       timeInput.value = chip.dataset.modalTime || '';
@@ -686,9 +797,10 @@ function setupNewTodoModal() {
       }
 
       await refreshAll(false);
+      showToast(`"${title}" 일정이 등록되었습니다 (${dueDate})`);
     } catch (err) {
       console.error('Failed to create todo from modal:', err);
-      alert(`일정 등록 실패: ${err.message}`);
+      showToast(`일정 등록 실패: ${err.message}`);
     }
   };
 
@@ -703,22 +815,33 @@ function setupNewTodoModal() {
   }
 }
 
-// ── 체크리스트 렌더링 ──
+// ── 체크리스트 렌더링 & 달성률 프로그레스 바 ──
 function renderTodoList() {
   const container = document.getElementById('todo-checklist');
   const subtitle = document.getElementById('view-count-subtitle');
+  const progFill = document.getElementById('view-progress-fill');
+  const progText = document.getElementById('view-progress-text');
   if (!container) return;
 
-  subtitle.textContent = `${state.todos.length}개`;
+  const total = state.todos.length;
+  const doneCount = state.todos.filter(t => t.status === 'done' || t.status === 'conditional_done').length;
+  const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
 
-  if (state.todos.length === 0) {
+  subtitle.textContent = `${total}개`;
+  if (progFill && progText) {
+    progFill.style.width = `${pct}%`;
+    progFill.classList.toggle('complete', pct === 100 && total > 0);
+    progText.textContent = total > 0 ? `${pct}% 완료 (${doneCount}/${total})` : '일정 없음';
+  }
+
+  if (total === 0) {
     container.innerHTML = `
-      <div style="text-align: center; padding: 50px 20px; color: var(--apple-muted);">
-        <div style="font-size: 36px; margin-bottom: 8px; color: var(--apple-primary);">
+      <div style="text-align: center; padding: 52px 20px; color: var(--apple-muted);">
+        <div style="font-size: 38px; margin-bottom: 8px; color: var(--apple-primary);">
           <i class="ph-bold ph-check-circle"></i>
         </div>
         <div style="font-size: 17px; font-weight: 400; color: var(--apple-foreground);">등록된 일정이 없습니다</div>
-        <div style="font-size: 14px; margin-top: 4px;">위 입력란에서 빠르게 추가하거나 상단 <b>[+ 새 일정 추가]</b> 버튼을 눌러 등록하세요.</div>
+        <div style="font-size: 14px; margin-top: 4px;">위 입력란에서 Enter로 즉시 추가하거나 <kbd style="background:#f5f5f7;border:1px solid #d1d1d6;border-radius:4px;padding:1px 5px;font-size:12px;">Ctrl+N</kbd>을 눌러 상세 일정을 등록하세요.</div>
       </div>
     `;
     return;
@@ -734,7 +857,6 @@ function renderTodoList() {
     const isFinished = todo.status === 'done' || todo.status === 'conditional_done';
     const isOverdue = !isFinished && todo.due_date < todayStr;
 
-    // 카테고리 정보
     let catHtml = '';
     if (todo.category_id != null) {
       const cat = state.categories.find(c => c.id === todo.category_id);
@@ -749,10 +871,9 @@ function renderTodoList() {
       }
     }
 
-    // 시간 & 기한 표시
     let dueHtml = `<span><i class="ph ph-calendar"></i> ${todo.due_date}</span>`;
     if (todo.due_time) {
-      dueHtml += `<span><i class="ph ph-clock"></i> ${todo.due_time}</span>`;
+      dueHtml += `<span><i class="ph ph-clock"></i> ${todo.due_time.substring(0, 5)}</span>`;
     }
     if (isOverdue) {
       dueHtml += `<span class="overdue-tag"><i class="ph-bold ph-warning"></i> 기한 초과</span>`;
@@ -761,20 +882,18 @@ function renderTodoList() {
       dueHtml += `<span style="color: var(--apple-muted);"><i class="ph ph-note"></i> ${escapeHtml(todo.memo)}</span>`;
     }
 
-    // 조건부 완료 사유
     let conditionHtml = '';
     if (todo.condition_note) {
       conditionHtml = `<span class="condition-tag"><i class="ph ph-tag"></i> 조건: ${escapeHtml(todo.condition_note)}</span>`;
     }
 
-    // 원형 체크박스 클래스
     let checkClass = 'apple-checkbox';
     if (todo.status === 'done') checkClass += ' checked';
     else if (todo.status === 'conditional_done') checkClass += ' conditional';
     else if (todo.status === 'in_progress') checkClass += ' in-progress';
 
     row.innerHTML = `
-      <div class="${checkClass}" data-id="${todo.id}"></div>
+      <div class="${checkClass}" data-id="${todo.id}" title="완료 토글"></div>
       <div class="todo-row-content">
         <div class="todo-row-title-line">
           <span class="todo-title ${isFinished ? 'done' : ''} ${isOverdue ? 'overdue' : ''}">${escapeHtml(todo.title)}</span>
@@ -785,8 +904,11 @@ function renderTodoList() {
           ${conditionHtml}
         </div>
       </div>
-      <span class="status-pill ${todo.status}" data-id="${todo.id}">${getStatusLabel(todo.status)}</span>
-      <span class="todo-info-btn"><i class="ph ph-info"></i></span>
+      <div class="todo-row-actions">
+        <button class="row-action-btn postpone" title="기한 +1일 미루기"><i class="ph-bold ph-calendar-plus"></i></button>
+        <span class="status-pill ${todo.status}" data-id="${todo.id}" title="클릭하여 상태 변경">${getStatusLabel(todo.status)}</span>
+        <button class="row-action-btn delete" title="즉시 삭제"><i class="ph-bold ph-trash"></i></button>
+      </div>
     `;
 
     // 체크박스 클릭 (완료 <-> 진행중 토글)
@@ -796,6 +918,7 @@ function renderTodoList() {
       const next = todo.status === 'done' ? 'in_progress' : 'done';
       await api.toggleStatus(todo.id, next);
       await refreshAll(false);
+      showToast(next === 'done' ? `"${todo.title}" 완료 처리됨` : `"${todo.title}" 진행중으로 변경됨`);
     });
 
     // 상태 배지 클릭 (순환)
@@ -811,6 +934,37 @@ function renderTodoList() {
       const next = cycle[todo.status] || 'planned';
       await api.toggleStatus(todo.id, next);
       await refreshAll(false);
+    });
+
+    // +1일 미루기 퀵 액션
+    const btnPostpone = row.querySelector('.row-action-btn.postpone');
+    btnPostpone.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const nextDate = addDaysToDateStr(todo.due_date, 1);
+      await api.updateTodo(todo.id, {
+        title: todo.title,
+        memo: todo.memo || '',
+        category_id: todo.category_id,
+        due_date: nextDate,
+        due_time: todo.due_time,
+        status: todo.status,
+        condition_note: todo.condition_note || '',
+      });
+      await refreshAll(false);
+      showToast(`"${todo.title}" 기한이 ${nextDate}로 변경되었습니다`);
+    });
+
+    // 즉시 삭제 퀵 액션
+    const btnDel = row.querySelector('.row-action-btn.delete');
+    btnDel.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await api.deleteTodo(todo.id);
+      if (state.selectedTodo && state.selectedTodo.id === todo.id) {
+        document.getElementById('inspector-panel').classList.add('hidden');
+        state.selectedTodo = null;
+      }
+      await refreshAll(false);
+      showToast(`"${todo.title}" 일정이 삭제되었습니다`);
     });
 
     // 행 클릭 -> 인스펙터 열기
@@ -893,6 +1047,7 @@ function setupInspector() {
       panel.classList.add('hidden');
       state.selectedTodo = null;
       await refreshAll(false);
+      showToast(`"${title}" 변경사항이 저장되었습니다`);
     } catch (err) {
       console.error('Failed to update todo:', err);
     }
@@ -900,11 +1055,13 @@ function setupInspector() {
 
   btnDelete.addEventListener('click', async () => {
     if (!state.selectedTodo) return;
+    const delTitle = state.selectedTodo.title;
     try {
       await api.deleteTodo(state.selectedTodo.id);
       panel.classList.add('hidden');
       state.selectedTodo = null;
       await refreshAll(false);
+      showToast(`"${delTitle}" 일정이 삭제되었습니다`);
     } catch (err) {
       console.error('Failed to delete todo:', err);
     }
@@ -968,6 +1125,7 @@ function setupCategoryModal() {
       await api.createCategory(name, state.newCategoryColor);
       modal.classList.add('hidden');
       await refreshAll(false);
+      showToast(`"${name}" 목록이 생성되었습니다`);
     } catch (err) {
       console.error('Failed to create category:', err);
     }
@@ -993,6 +1151,7 @@ async function setupSettings() {
         const s = await api.getSettings();
         s.hotzone_enabled = checkHotzone.checked;
         await api.saveSettings(s);
+        showToast('웹캠 핫존 설정이 저장되었습니다');
       } catch (e) {
         console.error(e);
       }
@@ -1010,4 +1169,3 @@ function escapeHtml(str) {
     "'": '&#039;',
   }[m]));
 }
-

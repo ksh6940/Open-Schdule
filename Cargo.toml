@@ -3,9 +3,10 @@ resolver = "2"
 members = ["crates/core", "crates/agent"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
+repository = "https://github.com/ksh6940/Open-Schdule"
 
 [workspace.dependencies]
 openschedule-core = { path = "crates/core" }

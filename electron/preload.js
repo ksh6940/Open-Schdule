@@ -36,9 +36,12 @@ function loadAgentInfo() {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getAgentInfo: () => loadAgentInfo(),
+  minimizeWindow: () => ipcRenderer.send('window-minimize'),
+  maximizeWindow: () => ipcRenderer.send('window-maximize'),
+  closeWindow: () => ipcRenderer.send('window-close'),
+  onWindowMaximized: (callback) => ipcRenderer.on('window-maximized', (_e, isMax) => callback(isMax)),
   openManager: () => ipcRenderer.send('open-manager'),
   hideOverlay: () => ipcRenderer.send('hide-overlay'),
   onRefreshData: (callback) => ipcRenderer.on('refresh-data', callback),
   onAgentReady: (callback) => ipcRenderer.on('agent-ready', callback),
 });
-
