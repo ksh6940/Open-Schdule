@@ -1,0 +1,18 @@
+[package]
+name = "openschedule-core"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "openschedule"
+path = "src/bin/openschedule.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+directories.workspace = true
+log.workspace = true
+egui.workspace = true

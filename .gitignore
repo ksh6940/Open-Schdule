@@ -1,0 +1,6 @@
+/target
+/target_agent
+/target_mgr
+/node_modules
+*.pdb
+*.log
