@@ -16,7 +16,7 @@ use openschedule_core::{
     model::{Category, Status, Todo, TodoDraft},
     AgentInfo, DateFilter, Settings, SmartCounts, Store, TodoQuery,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -36,6 +36,7 @@ pub async fn start_api_server() -> anyhow::Result<(u16, String, tokio::task::Joi
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/api/sync", post(sync_handler))
+        .route("/api/overlay", get(overlay_handler))
         // 투두 CRUD
         .route("/api/todos", get(list_todos_handler).post(create_todo_handler))
         .route(
@@ -129,6 +130,37 @@ fn auth_check(headers: &HeaderMap, state: &ApiState) -> Result<(), (StatusCode, 
 
 async fn health_handler() -> &'static str {
     "ok"
+}
+
+#[derive(Serialize)]
+struct OverlayData {
+    todos: Vec<Todo>,
+    categories: Vec<Category>,
+}
+
+fn overlay_data(store: &Store) -> anyhow::Result<OverlayData> {
+    Ok(OverlayData {
+        todos: store.query(&TodoQuery {
+            date: DateFilter::TodayAndOverdue,
+            ..Default::default()
+        })?,
+        categories: store.categories()?,
+    })
+}
+
+async fn overlay_handler(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<OverlayData>, (StatusCode, String)> {
+    auth_check(&headers, &state).map_err(|(sc, msg)| (sc, msg.to_string()))?;
+    let data = tokio::task::spawn_blocking(|| {
+        let store = Store::open_default()?;
+        overlay_data(&store)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(data))
 }
 
 async fn sync_handler(
@@ -471,3 +503,32 @@ async fn save_settings_handler(
     Ok(StatusCode::OK)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn overlay_data_matches_today_and_overdue_and_includes_categories() {
+        let store = Store::open_in_memory().unwrap();
+        let today = Local::now().date_naive();
+        store.add(&TodoDraft::new("today", today)).unwrap();
+        store.add(&TodoDraft::new("overdue", today - Duration::days(1))).unwrap();
+        store.add(&TodoDraft::new("future", today + Duration::days(1))).unwrap();
+        let data = overlay_data(&store).unwrap();
+        assert_eq!(data.todos.len(), 2);
+        assert_eq!(data.categories, store.categories().unwrap());
+        let json = serde_json::to_value(data).unwrap();
+        assert!(json["todos"].is_array());
+        assert!(json["categories"].is_array());
+    }
+
+    #[tokio::test]
+    async fn overlay_endpoint_requires_authentication() {
+        let result = overlay_handler(
+            State(ApiState { token: "test".into() }),
+            HeaderMap::new(),
+        ).await;
+        assert!(matches!(result, Err((StatusCode::UNAUTHORIZED, _))));
+    }
+}

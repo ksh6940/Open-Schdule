@@ -5,6 +5,7 @@ let overlayCategories = [];
 let overlayVisible = false;
 let overlayLoadPromise = null;
 let overlayLoadPending = false;
+let overlayRenderKey = null;
 
 function getLocalDateStr() {
   const d = new Date();
@@ -14,7 +15,7 @@ function getLocalDateStr() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
   updateHeaderDate();
   setupQuickAdd();
 
@@ -45,8 +46,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  await api.ensureReady();
-  await loadOverlayData();
 });
 
 function updateHeaderDate() {
@@ -79,16 +78,16 @@ async function loadOverlayData() {
 
 async function performOverlayLoad() {
   try {
-    const [todos, categories] = await Promise.all([
-      api.getTodos({ date: 'today_and_overdue' }),
-      api.getCategories(),
-    ]);
+    const { todos, categories } = await api.getOverlayData();
 
     overlayTodos = todos || [];
     overlayCategories = categories || [];
 
+    const renderKey = JSON.stringify([getLocalDateStr(), overlayTodos, overlayCategories]);
+    if (renderKey === overlayRenderKey) return;
     renderOverlayList();
     renderProgressPill();
+    overlayRenderKey = renderKey;
   } catch (err) {
     console.error('Failed to load overlay data:', err);
   }
@@ -132,6 +131,8 @@ function renderOverlayList() {
 
   container.innerHTML = '';
   const todayStr = getLocalDateStr();
+  const categoriesById = new Map(overlayCategories.map(category => [category.id, category]));
+  const fragment = document.createDocumentFragment();
 
   overlayTodos.forEach(todo => {
     const isFinished = todo.status === 'done' || todo.status === 'conditional_done';
@@ -139,7 +140,7 @@ function renderOverlayList() {
 
     let catHtml = '';
     if (todo.category_id != null) {
-      const cat = overlayCategories.find(c => c.id === todo.category_id);
+      const cat = categoriesById.get(todo.category_id);
       if (cat) {
         const hex = `#${cat.color.toString(16).padStart(6, '0')}`;
         catHtml = `
@@ -184,8 +185,12 @@ function renderOverlayList() {
     const checkEl = row.querySelector('.apple-checkbox');
     checkEl.addEventListener('click', async () => {
       const next = todo.status === 'done' ? 'in_progress' : 'done';
-      await api.toggleStatus(todo.id, next);
-      await loadOverlayData();
+      try {
+        await api.toggleStatus(todo.id, next);
+        await loadOverlayData();
+      } catch (err) {
+        console.error('Failed to update overlay todo status:', err);
+      }
     });
 
     const pillEl = row.querySelector('.status-pill');
@@ -197,12 +202,17 @@ function renderOverlayList() {
         done: 'planned',
       };
       const next = cycle[todo.status] || 'planned';
-      await api.toggleStatus(todo.id, next);
-      await loadOverlayData();
+      try {
+        await api.toggleStatus(todo.id, next);
+        await loadOverlayData();
+      } catch (err) {
+        console.error('Failed to update overlay todo status:', err);
+      }
     });
 
-    container.appendChild(row);
+    fragment.appendChild(row);
   });
+  container.appendChild(fragment);
 }
 
 function setupQuickAdd() {
@@ -254,7 +264,7 @@ function getStatusLabel(s) {
     case 'in_progress': return '<i class="ph ph-circle-half"></i> 진행중';
     case 'conditional_done': return '<i class="ph-bold ph-check-circle"></i> 조건부';
     case 'done': return '<i class="ph-fill ph-check-circle"></i> 완료';
-    default: return s;
+    default: return escapeHtml(s);
   }
 }
 

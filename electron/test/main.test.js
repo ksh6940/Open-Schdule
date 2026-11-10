@@ -39,6 +39,7 @@ async function startMain({ trayFails = false, existingAgent = false } = {}) {
     show() { this.visible = true; }
     showInactive() { this.visible = true; }
     getBounds() { return this.options; }
+    setPosition(x, y) { this.options.x = x; this.options.y = y; }
     focus() {}
     close() {
       let prevented = false;
@@ -69,6 +70,7 @@ async function startMain({ trayFails = false, existingAgent = false } = {}) {
     screen: {
       getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1920 } }),
       getCursorScreenPoint: () => cursor,
+      on() {},
     },
   };
   const child = new EventEmitter();

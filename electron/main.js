@@ -274,11 +274,25 @@ function hideOverlay(canCancel = false) {
 
 // 웹캠 상단 핫존 마우스 커서 폴링
 function startHotzonePolling() {
+  let displayBounds = screen.getPrimaryDisplay().bounds;
+  const updateDisplayBounds = () => {
+    displayBounds = screen.getPrimaryDisplay().bounds;
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      const { width } = overlayWindow.getBounds();
+      overlayWindow.setPosition(
+        displayBounds.x + Math.round((displayBounds.width - width) / 2),
+        displayBounds.y
+      );
+    }
+  };
+  screen.on('display-added', updateDisplayBounds);
+  screen.on('display-removed', updateDisplayBounds);
+  screen.on('display-metrics-changed', updateDisplayBounds);
+
   setInterval(() => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return;
 
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { x: screenX, y: screenY, width: screenWidth } = primaryDisplay.bounds;
+    const { x: screenX, y: screenY, width: screenWidth } = displayBounds;
     const cursor = screen.getCursorScreenPoint();
 
     // 웹캠 핫존: 화면 중앙 ±120px, 상단 Y <= 6px
@@ -328,7 +342,7 @@ function startHotzonePolling() {
         }
       }
     }
-  }, 80);
+  }, 100);
 }
 
 // 시스템 트레이 설정
@@ -360,7 +374,7 @@ function setupTray() {
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule v1.01');
+    tray.setToolTip('OpenSchedule v1.02');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {

@@ -5,6 +5,7 @@ class ApiClient {
     this.baseUrl = 'http://127.0.0.1:0';
     this.token = '';
     this.initialized = false;
+    this.overlayEndpointAvailable = true;
   }
 
   init() {
@@ -54,7 +55,9 @@ class ApiClient {
 
       if (!resp.ok) {
         const text = await resp.text();
-        throw new Error(`API Error ${resp.status}: ${text}`);
+        const error = new Error(`API Error ${resp.status}: ${text}`);
+        error.status = resp.status;
+        throw error;
       }
 
       const contentType = resp.headers.get('content-type') || '';
@@ -70,6 +73,22 @@ class ApiClient {
   }
 
   // 투두 CRUD
+  async getOverlayData() {
+    if (this.overlayEndpointAvailable) {
+      try {
+        return await this.request('/api/overlay');
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        this.overlayEndpointAvailable = false;
+      }
+    }
+    const [todos, categories] = await Promise.all([
+      this.getTodos({ date: 'today_and_overdue' }),
+      this.getCategories(),
+    ]);
+    return { todos, categories };
+  }
+
   async getTodos(params = {}) {
     const q = new URLSearchParams();
     if (params.date) q.set('date', params.date);
@@ -170,4 +189,3 @@ class ApiClient {
 }
 
 window.api = new ApiClient();
-
