@@ -62,6 +62,8 @@ pub struct AgentInfo {
     pub port: u16,
     pub token: String,
     pub pid: u32,
+    #[serde(default)]
+    pub schedules_dir: Option<std::path::PathBuf>,
 }
 
 impl AgentInfo {
@@ -76,8 +78,8 @@ impl AgentInfo {
     pub fn save(&self) -> Result<()> {
         let json = serde_json::to_string(self)?;
         // Electron이나 외부 툴이 어느 경로를 찾든 읽을 수 있도록 두 곳 모두에 저장
-        let _ = std::fs::write(crate::paths::agent_info_path(), &json);
-        let _ = std::fs::write(crate::paths::agent_info_alt_path(), &json);
+        std::fs::write(crate::paths::agent_info_path(), &json)?;
+        std::fs::write(crate::paths::agent_info_alt_path(), &json)?;
         Ok(())
     }
 

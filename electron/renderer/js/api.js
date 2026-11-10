@@ -13,13 +13,19 @@ class ApiClient {
     if (window.electronAPI && window.electronAPI.getAgentInfo) {
       const info = window.electronAPI.getAgentInfo();
       if (info && info.port && info.token) {
-        this.baseUrl = `http://127.0.0.1:${info.port}`;
+        const nextUrl = `http://127.0.0.1:${info.port}`;
+        if (this.baseUrl !== nextUrl || this.token !== info.token) {
+          this.overlayEndpointAvailable = true;
+          this.dashboardEndpointAvailable = true;
+        }
+        this.baseUrl = nextUrl;
         this.token = info.token;
         this.initialized = true;
         console.log(`[API] Connected to Rust Engine at ${this.baseUrl} (PID ${info.pid})`);
         return true;
       }
     }
+    this.initialized = false;
     return false;
   }
 
@@ -41,14 +47,13 @@ class ApiClient {
   }
 
   async request(path, options = {}) {
-    await this.ensureReady();
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.token}`,
-      ...(options.headers || {}),
-    };
-
-    try {
+    if (!await this.ensureReady()) throw new Error('Rust 엔진 연결 정보를 찾을 수 없습니다.');
+    const requestOnce = async () => {
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`,
+        ...(options.headers || {}),
+      };
       const resp = await fetch(`${this.baseUrl}${path}`, {
         ...options,
         headers,
@@ -66,9 +71,17 @@ class ApiClient {
         return await resp.json();
       }
       return await resp.text();
+    };
+    const previousUrl = this.baseUrl;
+    const previousToken = this.token;
+    try {
+      return await requestOnce();
     } catch (err) {
-      console.warn(`Request to ${path} failed, retrying init...`, err);
-      this.init();
+      const changed = this.init() && (this.baseUrl !== previousUrl || this.token !== previousToken);
+      if (changed && (!options.method || options.method.toUpperCase() === 'GET')) {
+        return await requestOnce();
+      }
+      console.warn(`Request to ${path} failed:`, err);
       throw err;
     }
   }
@@ -90,10 +103,15 @@ class ApiClient {
     return { todos, categories };
   }
 
-  async getDashboardData() {
+  async getDashboardData(params = {}) {
     if (this.dashboardEndpointAvailable) {
       try {
-        return await this.request('/api/dashboard');
+        const q = new URLSearchParams();
+        if (params.date) q.set('date', params.date);
+        if (params.category_id != null) q.set('category_id', params.category_id);
+        if (params.status) q.set('status', params.status);
+        if (params.search) q.set('search', params.search);
+        return await this.request(`/api/dashboard?${q.toString()}`);
       } catch (err) {
         if (err.status !== 404) throw err;
         this.dashboardEndpointAvailable = false;
@@ -199,8 +217,8 @@ class ApiClient {
 
   async checkHealth() {
     try {
-      const res = await this.request('/health');
-      return res === 'ok';
+      const res = await this.request('/api/settings');
+      return res !== null && typeof res === 'object';
     } catch (e) {
       return false;
     }

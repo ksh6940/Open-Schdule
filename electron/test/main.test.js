@@ -5,7 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-async function startMain({ trayFails = false, existingAgent = false, settings = null, lock = true, argv = [] } = {}) {
+async function startMain({ trayFails = false, existingAgent = false, settings = null, lock = true, argv = [], schedulesDir = null, engineStatus = 200 } = {}) {
   const windows = [];
   const intervals = [];
   const timers = new Map();
@@ -83,17 +83,24 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
   child.stderr = new EventEmitter();
   let spawned = 0;
   let stopped;
+  const watchers = new Map();
   const mockFs = {
-    existsSync: file => (existingAgent && file.endsWith('agent.json')) || (settings && file.endsWith('settings.json')),
-    readFileSync: file => file.endsWith('settings.json') ? JSON.stringify(settings) : JSON.stringify({ pid: 4321, port: 123, token: 'test' }),
+    existsSync: file => (existingAgent && file.endsWith('agent.json')) || (settings && file.endsWith('settings.json')) || (schedulesDir && file === path.resolve(schedulesDir)),
+    readFileSync: file => file.endsWith('settings.json') ? JSON.stringify(settings) : JSON.stringify({ pid: 4321, port: 123, token: 'test', schedules_dir: schedulesDir }),
     mkdirSync() {},
-    watch() {},
+    watch: (dir, callback) => { watchers.set(dir, callback); },
   };
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   vm.runInNewContext(source, {
     require: name => {
       if (name === 'electron') return electron;
       if (name === 'fs') return mockFs;
+      if (name === 'http') return {
+        get: (_options, callback) => {
+          queueMicrotask(() => callback({ statusCode: engineStatus, resume() {} }));
+          return { on() {} };
+        },
+      };
       if (name === 'child_process') return {
         spawn: () => { spawned++; return child; },
         spawnSync: (command, args) => { stopped = { command, args }; return { status: 0 }; },
@@ -110,13 +117,22 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
     clearTimeout: id => timers.delete(id),
   });
   await new Promise(resolve => setImmediate(resolve));
-  return { app, ipc, windows, tray, getQuitCount: () => quitCount,
+  return { app, ipc, windows, tray, watchers, getQuitCount: () => quitCount,
     getSpawned: () => spawned, getStopped: () => stopped,
     move: point => { cursor = point; }, advance: ms => { now += ms; },
     poll: () => intervals[intervals.length - 1](),
     runTimers: () => { for (const [id, callback] of timers) { timers.delete(id); callback(); } },
   };
 }
+
+test('watches the actual agent schedule directory and refreshes on changes', async () => {
+  const dir = path.resolve('test-agent-schedules');
+  const main = await startMain({ existingAgent: true, schedulesDir: dir });
+  assert.ok(main.watchers.has(dir));
+  main.watchers.get(dir)('change', '2026-01-01_schedule.json');
+  main.runTimers();
+  assert.deepEqual(main.windows[0].messages.at(-1), ['refresh-data']);
+});
 
 test('close hides the window, tray restores it, and quit stops the owned engine', async () => {
   const main = await startMain();
@@ -142,6 +158,12 @@ test('quitting does not terminate an independently running engine', async () => 
   assert.equal(main.getSpawned(), 0);
   main.ipc.emit('app-quit');
   assert.equal(main.getStopped(), undefined);
+});
+
+test('unhealthy existing engine does not report ready or spawn a duplicate', async () => {
+  const main = await startMain({ existingAgent: true, engineStatus: 401 });
+  assert.equal(main.getSpawned(), 0);
+  assert.equal(main.windows[0].messages.some(message => message[0] === 'agent-ready'), false);
 });
 
 test('overlay transitions on every show and cancels an automatic hide on re-entry', async () => {

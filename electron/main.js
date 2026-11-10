@@ -18,12 +18,14 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const http = require('http');
 
 let mainWindow = null;
 let overlayWindow = null;
 let tray = null;
 let rustProcess = null;
 let isQuitting = false;
+let refreshAgentWatchers = null;
 
 let hotzoneEnteredAt = null;
 let leaveHotzoneAt = null;
@@ -91,20 +93,69 @@ function readAgentInfo() {
   return null;
 }
 
+function engineResponds(info) {
+  return new Promise(resolve => {
+    const request = http.get({
+      host: '127.0.0.1', port: info.port, path: '/api/settings',
+      headers: { Authorization: `Bearer ${info.token}` }, timeout: 1000,
+    }, response => {
+      response.resume();
+      resolve(response.statusCode === 200);
+    });
+    request.on('timeout', () => request.destroy(new Error('Engine health check timed out')));
+    request.on('error', () => resolve(false));
+  });
+}
+
 // Rust 에이전트 프로세스 기동
-function ensureRustEngine() {
+async function ensureRustEngine() {
   const existingInfo = readAgentInfo();
+  let existingProcessAlive = false;
   if (existingInfo && existingInfo.pid) {
     try {
       process.kill(existingInfo.pid, 0);
-      console.log(`[Rust Engine] Already running at PID ${existingInfo.pid}, port ${existingInfo.port}`);
-      notifyWindowsAgentReady();
-      return;
+      existingProcessAlive = true;
+      if (await engineResponds(existingInfo)) {
+        console.log(`[Rust Engine] Already running at PID ${existingInfo.pid}, port ${existingInfo.port}`);
+        notifyWindowsAgentReady();
+        return;
+      }
+      console.warn('[Rust Engine] Existing process did not authenticate; waiting without starting a duplicate.');
     } catch (e) {
       console.log('[Rust Engine] Previous process dead, starting new instance...');
     }
   }
 
+  if (!existingProcessAlive) spawnRustEngine();
+
+  let checkCount = 0;
+  let checking = false;
+  const pollInterval = setInterval(async () => {
+    if (checking) return;
+    checking = true;
+    checkCount++;
+    const info = readAgentInfo();
+    if (info && info.pid) {
+      try {
+        process.kill(info.pid, 0);
+        if (await engineResponds(info)) {
+          clearInterval(pollInterval);
+          console.log(`[Rust Engine] Ready! Port ${info.port}`);
+          notifyWindowsAgentReady();
+          checking = false;
+          return;
+        }
+      } catch (e) {}
+    }
+    if (checkCount > 60) {
+      clearInterval(pollInterval);
+      console.warn('[Rust Engine] Timeout waiting for authenticated engine.');
+    }
+    checking = false;
+  }, 250);
+}
+
+function spawnRustEngine() {
   const execDir = path.dirname(process.execPath);
   const candidates = [
     path.join(__dirname, '..', 'target', 'release', 'openschedule-agent.exe'),
@@ -147,26 +198,10 @@ function ensureRustEngine() {
       console.log(`[Rust Engine] Exited with code ${code}, signal ${sig}`);
     });
   }
-
-  let checkCount = 0;
-  const pollInterval = setInterval(() => {
-    checkCount++;
-    const info = readAgentInfo();
-    if (info && info.pid) {
-      try {
-        process.kill(info.pid, 0);
-        clearInterval(pollInterval);
-        console.log(`[Rust Engine] Ready! Port ${info.port}, Token: ${info.token.substring(0, 8)}...`);
-        notifyWindowsAgentReady();
-      } catch (e) {}
-    } else if (checkCount > 60) {
-      clearInterval(pollInterval);
-      console.warn('[Rust Engine] Timeout waiting for agent.json to be created.');
-    }
-  }, 250);
 }
 
 function notifyWindowsAgentReady() {
+  if (refreshAgentWatchers) refreshAgentWatchers();
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('agent-ready');
     mainWindow.webContents.send('refresh-data');
@@ -430,7 +465,7 @@ function setupTray() {
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule v1.04');
+    tray.setToolTip('OpenSchedule v1.05');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {
@@ -511,7 +546,7 @@ if (!hasInstanceLock) {
   });
   app.whenReady().then(() => {
     reloadHotzoneSettings();
-    ensureRustEngine();
+    ensureRustEngine().catch(error => console.error('[Rust Engine] Startup failed:', error));
     createMainWindow();
     setupTray();
     startHotzonePolling();
@@ -528,6 +563,7 @@ if (!hasInstanceLock) {
 // CLI 등 외부 프로세스에서 SQLite DB 또는 schedules/*.json을 변경했을 때 실시간 감지하여 UI 갱신
 function startDbWatcher() {
   let debounceTimer = null;
+  const scheduleWatchers = new Map();
   const triggerRefresh = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
@@ -547,7 +583,12 @@ function startDbWatcher() {
       fs.mkdirSync(dataDir, { recursive: true });
     }
     fs.watch(dataDir, (eventType, filename) => {
+      filename = filename && filename.toString();
       if (filename === 'settings.json') reloadHotzoneSettings();
+      if (filename && filename.startsWith('agent')) {
+        refreshAgentWatchers();
+        notifyWindowsAgentReady();
+      }
       if (filename && (filename.startsWith('todos.db') || filename.startsWith('agent'))) {
         triggerRefresh();
       }
@@ -556,19 +597,32 @@ function startDbWatcher() {
     console.warn('[DB Watcher] Failed to watch dataDir:', e);
   }
 
-  try {
-    const schedulesDir = path.join(__dirname, '..', 'schedules');
-    if (!fs.existsSync(schedulesDir)) {
-      fs.mkdirSync(schedulesDir, { recursive: true });
-    }
-    fs.watch(schedulesDir, (eventType, filename) => {
-      if (filename && filename.endsWith('_schedule.json')) {
-        triggerRefresh();
+  refreshAgentWatchers = () => {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const info = readAgentInfo();
+    const directories = [
+      path.join(__dirname, '..', 'schedules'),
+      path.join(appData, 'OpenSchedule', 'schedules'),
+    ];
+    if (info && typeof info.schedules_dir === 'string') directories.push(info.schedules_dir);
+    for (const dir of new Set(directories.map(value => path.resolve(value)))) {
+      if (scheduleWatchers.has(dir)) continue;
+      try {
+        if (!fs.existsSync(dir)) continue;
+        const watcher = fs.watch(dir, (eventType, filename) => {
+          if (!filename || filename.toString().endsWith('_schedule.json')) triggerRefresh();
+        });
+        if (watcher && watcher.on) watcher.on('error', error => {
+          console.error('[Schedules Watcher] Failed:', dir, error);
+          scheduleWatchers.delete(dir);
+        });
+        scheduleWatchers.set(dir, watcher);
+      } catch (error) {
+        console.error('[Schedules Watcher] Failed:', dir, error);
       }
-    });
-  } catch (e) {
-    console.warn('[Schedules Watcher] Failed to watch schedulesDir:', e);
-  }
+    }
+  };
+  refreshAgentWatchers();
 }
 
 app.on('before-quit', () => {

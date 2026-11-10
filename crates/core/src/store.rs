@@ -96,6 +96,27 @@ fn schedule_matches(path: &Path, date: &str, entries: &[TodoJsonEntry]) -> Resul
     Ok(existing.date == date && existing.count == entries.len() && existing.todos == entries)
 }
 
+fn latest_schedule_files(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = std::collections::BTreeMap::new();
+    for dir in dirs {
+        let entries = std::fs::read_dir(dir)
+            .with_context(|| format!("일정 폴더 읽기 실패: {}", dir.display()))?;
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            if !name.to_string_lossy().ends_with("_schedule.json") {
+                continue;
+            }
+            let modified = entry.metadata()?.modified()?;
+            match files.get(&name) {
+                Some((old_modified, _)) if *old_modified >= modified => {}
+                _ => { files.insert(name, (modified, entry.path())); }
+            }
+        }
+    }
+    Ok(files.into_values().map(|(_, path)| path).collect())
+}
+
 pub struct Store {
     conn: Connection,
     sync_json: bool,
@@ -212,9 +233,12 @@ impl Store {
 
         if entries.is_empty() {
             // 해당 날짜에 할 일이 모두 삭제된 경우 빈 JSON 파일도 정리
-            let _ = std::fs::remove_file(&primary_path);
-            if appdata_path != primary_path {
-                let _ = std::fs::remove_file(&appdata_path);
+            for path in [&primary_path, &appdata_path] {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error).with_context(|| format!("JSON 삭제 실패: {}", path.display())),
+                }
             }
             return Ok(primary_path);
         }
@@ -393,19 +417,8 @@ impl Store {
             dirs.push(appdata_dir);
         }
 
-        for dir in dirs {
-            if let Ok(read_dir) = std::fs::read_dir(&dir) {
-                for entry in read_dir.flatten() {
-                    let path = entry.path();
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.ends_with("_schedule.json") {
-                            if let Ok(n) = self.import_date_json_file(&path) {
-                                total_imported += n;
-                            }
-                        }
-                    }
-                }
-            }
+        for path in latest_schedule_files(&dirs)? {
+            total_imported += self.import_date_json_file(&path)?;
         }
         self.export_all_dates_to_json()?;
         Ok(total_imported)
@@ -489,7 +502,7 @@ impl Store {
             "UPDATE categories SET name=?1, color=?2 WHERE id=?3",
             params![name.trim(), color, id],
         )?;
-        let _ = self.export_all_dates_to_json();
+        self.export_all_dates_to_json().context("DB 변경 후 JSON 동기화 실패")?;
         Ok(())
     }
 
@@ -500,7 +513,7 @@ impl Store {
         )?;
         self.conn
             .execute("DELETE FROM categories WHERE id=?1", params![id])?;
-        let _ = self.export_all_dates_to_json();
+        self.export_all_dates_to_json().context("DB 변경 후 JSON 동기화 실패")?;
         Ok(())
     }
 
@@ -581,7 +594,7 @@ impl Store {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-        let _ = self.save_date_json(d.due_date);
+        self.save_date_json(d.due_date).context("DB 변경 후 JSON 동기화 실패")?;
         Ok(id)
     }
 
@@ -602,10 +615,10 @@ impl Store {
                 id
             ],
         )?;
-        let _ = self.save_date_json(d.due_date);
+        self.save_date_json(d.due_date).context("DB 변경 후 JSON 동기화 실패")?;
         if let Some(old_d) = old_date {
             if old_d != d.due_date {
-                let _ = self.save_date_json(old_d);
+                self.save_date_json(old_d).context("DB 변경 후 JSON 동기화 실패")?;
             }
         }
         Ok(())
@@ -618,7 +631,7 @@ impl Store {
             params![status.as_db(), Local::now().to_rfc3339(), id],
         )?;
         if let Some(d) = target_date {
-            let _ = self.save_date_json(d);
+            self.save_date_json(d).context("DB 변경 후 JSON 동기화 실패")?;
         }
         Ok(())
     }
@@ -628,7 +641,7 @@ impl Store {
         self.conn
             .execute("DELETE FROM todos WHERE id=?1", params![id])?;
         if let Some(d) = target_date {
-            let _ = self.save_date_json(d);
+            self.save_date_json(d).context("DB 변경 후 JSON 동기화 실패")?;
         }
         Ok(())
     }
@@ -931,5 +944,32 @@ mod tests {
         );
         assert_eq!(Status::parse_loose("in_progress"), Some(Status::InProgress));
         assert_eq!(Status::parse_loose("??"), None);
+    }
+
+    #[test]
+    fn newest_schedule_replica_is_the_only_one_imported() {
+        let root = std::env::temp_dir().join(format!("openschedule-replica-test-{}", std::process::id()));
+        let primary = root.join("primary");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        let filename = "2026-01-01_schedule.json";
+        let store = Store::open_in_memory().unwrap();
+        let older = backup.join(filename);
+        let newer = primary.join(filename);
+        std::fs::write(&older, r#"[{"title":"old"}]"#).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::fs::write(&newer, r#"[{"title":"new"}]"#).unwrap();
+        let paths = latest_schedule_files(&[primary.clone(), backup.clone()]).unwrap();
+        assert_eq!(paths, vec![newer.clone()]);
+        for path in paths { store.import_date_json_file(&path).unwrap(); }
+        let todos = store.query(&TodoQuery::default()).unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].title, "new");
+        std::fs::remove_file(older).unwrap();
+        std::fs::remove_file(newer).unwrap();
+        std::fs::remove_dir(primary).unwrap();
+        std::fs::remove_dir(backup).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

@@ -52,6 +52,26 @@ test('concurrent refreshes are coalesced without dropping a later change', async
   assert.equal(calls, 2);
 });
 
+test('dashboard refresh uses filtered snapshot without a second request', async () => {
+  const { context } = loadRenderer();
+  let queries = 0;
+  let rendered = 0;
+  context.api = {
+    getDashboardData: async params => {
+      assert.equal(params.date, 'today_and_overdue');
+      return { smart_counts: {}, category_counts: {}, categories: [], todos: [{ id: 1 }],
+        filtered_todos: [{ id: 1 }] };
+    },
+    getTodos: async () => { queries++; return []; },
+  };
+  context.renderTest = () => { rendered++; };
+  vm.runInContext('renderSmartCounts = () => {}; renderCategories = () => {}; updateCategorySelect = () => {}; renderTodoList = renderTest; updateScheduleFileIndicator = () => {}', context);
+  await vm.runInContext('performRefresh()', context);
+  assert.equal(queries, 0);
+  assert.equal(rendered, 1);
+  assert.equal(vm.runInContext('state.todos[0].id', context), 1);
+});
+
 test('hotzone settings save all fields and notify main process', async () => {
   const listeners = {};
   const elements = {

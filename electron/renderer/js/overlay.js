@@ -40,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (window.electronAPI.onAgentReady) {
       window.electronAPI.onAgentReady(() => {
+        api.init();
         if (overlayVisible) loadOverlayData();
       });
     }

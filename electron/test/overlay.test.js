@@ -106,3 +106,28 @@ test('dashboard fallback preserves existing engine compatibility', async () => {
   await api.getDashboardData();
   assert.equal(combinedCalls, 1);
 });
+
+test('read retries after agent changes but mutations are never retried', async () => {
+  let info = { port: 1, token: 'old' };
+  let calls = [];
+  const response = { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ ok: true }) };
+  const context = {
+    window: { electronAPI: { getAgentInfo: () => info } }, console, URLSearchParams, setTimeout,
+    fetch: async url => {
+      calls.push(url);
+      if (calls.length === 1) { info = { port: 2, token: 'new' }; throw new Error('offline'); }
+      return response;
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'api.js'), 'utf8'), context);
+  const api = context.window.api;
+  api.overlayEndpointAvailable = false;
+  assert.equal((await api.request('/api/overlay')).ok, true);
+  assert.deepEqual(calls, ['http://127.0.0.1:1/api/overlay', 'http://127.0.0.1:2/api/overlay']);
+  assert.equal(api.overlayEndpointAvailable, true);
+  calls = [];
+  context.fetch = async url => { calls.push(url); info = { port: 3, token: 'next' }; throw new Error('offline'); };
+  await assert.rejects(api.request('/api/todos', { method: 'POST' }), /offline/);
+  assert.equal(calls.length, 1);
+});

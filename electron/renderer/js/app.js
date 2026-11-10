@@ -90,13 +90,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const quickDate = document.getElementById('quick-add-date');
   if (quickDate) quickDate.value = getLocalDateStr(0);
 
-  // 엔진 연결 대기 및 데이터 로드
-  await initEngineConnection();
-
   // IPC 이벤트 수신 (엔진 준비 완료 또는 CLI/외부 데이터 변경)
   if (window.electronAPI) {
     if (window.electronAPI.onAgentReady) {
       window.electronAPI.onAgentReady(async () => {
+        api.init();
         await initEngineConnection();
       });
     }
@@ -104,6 +102,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       window.electronAPI.onRefreshData(() => refreshAll(false));
     }
   }
+
+  // 엔진 연결 대기 및 데이터 로드
+  await initEngineConnection();
 
 });
 
@@ -194,7 +195,7 @@ async function initEngineConnection() {
     pill.innerHTML = '<i class="ph-bold ph-spinner"></i> 연결 중...';
   }
 
-  const ready = await api.ensureReady();
+  const ready = await api.ensureReady() && await api.checkHealth();
   if (ready) {
     if (pill) {
       pill.className = 'status-pill done';
@@ -228,9 +229,16 @@ async function refreshAll(full = true) {
 
 async function performRefresh() {
   try {
+    const requestId = ++todoLoadRequestId;
+    const params = getTodoParams();
     const { smart_counts: smartCounts, category_counts: categoryCounts,
-      categories, todos: allTodos } = await api.getDashboardData();
+      categories, todos: allTodos, filtered_todos: filteredTodos } = await api.getDashboardData(params);
 
+    const pill = document.getElementById('connection-status-pill');
+    if (pill) {
+      pill.className = 'status-pill done';
+      pill.innerHTML = '<i class="ph-fill ph-circle"></i> 연결됨';
+    }
     state.smartCounts = smartCounts || { today: 0, scheduled: 0, all: 0, completed: 0 };
     state.categoryCounts = categoryCounts || {};
     state.categories = categories || [];
@@ -244,18 +252,26 @@ async function performRefresh() {
       renderCalendarGrid();
     }
 
-    await loadTodos();
+    if (requestId === todoLoadRequestId) {
+      if (Array.isArray(filteredTodos)) {
+        state.todos = filteredTodos;
+        renderTodoList();
+        updateScheduleFileIndicator();
+      } else {
+        await loadTodos();
+      }
+    }
   } catch (err) {
     console.error('Failed to refresh data:', err);
+    const pill = document.getElementById('connection-status-pill');
+    if (pill) {
+      pill.className = 'status-pill planned';
+      pill.innerHTML = '<i class="ph-bold ph-warning"></i> 연결 오류';
+    }
   }
 }
 
-async function loadTodos() {
-  if (searchDebounceTimeout) {
-    clearTimeout(searchDebounceTimeout);
-    searchDebounceTimeout = null;
-  }
-  const requestId = ++todoLoadRequestId;
+function getTodoParams() {
   const params = {};
 
   if (state.viewMode === 'calendar') {
@@ -278,6 +294,16 @@ async function loadTodos() {
   if (state.filterStatus) {
     params.status = state.filterStatus;
   }
+  return params;
+}
+
+async function loadTodos() {
+  if (searchDebounceTimeout) {
+    clearTimeout(searchDebounceTimeout);
+    searchDebounceTimeout = null;
+  }
+  const requestId = ++todoLoadRequestId;
+  const params = getTodoParams();
 
   try {
     const todos = await api.getTodos(params);

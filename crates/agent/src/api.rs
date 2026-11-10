@@ -75,6 +75,7 @@ pub async fn start_api_server() -> anyhow::Result<(u16, String, tokio::task::Joi
         port,
         token: token.clone(),
         pid: std::process::id(),
+        schedules_dir: Some(openschedule_core::paths::schedules_dir()),
     };
     info.save()?;
     log::info!(
@@ -145,25 +146,28 @@ struct DashboardData {
     category_counts: HashMap<i64, usize>,
     categories: Vec<Category>,
     todos: Vec<Todo>,
+    filtered_todos: Vec<Todo>,
 }
 
-fn dashboard_data(store: &Store) -> anyhow::Result<DashboardData> {
+fn dashboard_data(store: &Store, filter: &TodoQuery) -> anyhow::Result<DashboardData> {
     Ok(DashboardData {
         smart_counts: store.smart_counts()?,
         category_counts: store.category_counts()?,
         categories: store.categories()?,
         todos: store.query(&TodoQuery::default())?,
+        filtered_todos: store.query(filter)?,
     })
 }
 
 async fn dashboard_handler(
     State(state): State<ApiState>,
     headers: HeaderMap,
+    Query(params): Query<TodoQueryParams>,
 ) -> Result<Json<DashboardData>, (StatusCode, String)> {
     auth_check(&headers, &state).map_err(|(sc, msg)| (sc, msg.to_string()))?;
-    let data = tokio::task::spawn_blocking(|| {
+    let data = tokio::task::spawn_blocking(move || {
         let store = Store::open_default()?;
-        dashboard_data(&store)
+        dashboard_data(&store, &todo_query(params))
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -201,10 +205,9 @@ async fn sync_handler(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     auth_check(&headers, &state).map_err(|(sc, msg)| (sc, msg.to_string()))?;
-    let store =
-        Store::open_default().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    store
-        .sync_all_json_files()
+    tokio::task::spawn_blocking(Store::open_default)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
@@ -275,6 +278,14 @@ async fn list_todos_handler(
     let store =
         Store::open_default().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let q = todo_query(params);
+    let todos = store
+        .query(&q)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(todos))
+}
+
+fn todo_query(params: TodoQueryParams) -> TodoQuery {
     let date_filter = match params.date.as_deref() {
         Some("today") => DateFilter::Today,
         Some("scheduled") => DateFilter::Scheduled,
@@ -297,17 +308,12 @@ async fn list_todos_handler(
         .map(|s| vec![s])
         .unwrap_or_default();
 
-    let q = TodoQuery {
+    TodoQuery {
         date: date_filter,
         category: params.category_id.map(Some),
         statuses,
         search: params.search.unwrap_or_default(),
-    };
-
-    let todos = store
-        .query(&q)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(todos))
+    }
 }
 
 async fn create_todo_handler(
@@ -569,10 +575,17 @@ mod tests {
     fn dashboard_data_matches_individual_queries() {
         let store = Store::open_in_memory().unwrap();
         store.add(&TodoDraft::new("test", Local::now().date_naive())).unwrap();
-        let data = dashboard_data(&store).unwrap();
+        let data = dashboard_data(&store, &TodoQuery::default()).unwrap();
         assert_eq!(data.smart_counts, store.smart_counts().unwrap());
         assert_eq!(data.category_counts, store.category_counts().unwrap());
         assert_eq!(data.categories, store.categories().unwrap());
         assert_eq!(data.todos, store.query(&TodoQuery::default()).unwrap());
+        let query = todo_query(TodoQueryParams {
+            date: Some("completed".into()), category_id: None, status: None, search: None,
+        });
+        let filtered = dashboard_data(&store, &query).unwrap();
+        assert_eq!(filtered.filtered_todos, store.query(&query).unwrap());
+        assert_eq!(filtered.filtered_todos.len(), 0);
+        assert_eq!(filtered.todos.len(), 1);
     }
 }

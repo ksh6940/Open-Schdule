@@ -1,6 +1,6 @@
-# OpenSchedule (OpenLab Schedule) v1.04
+# OpenSchedule (OpenLab Schedule) v1.05
 
-[![Version](https://img.shields.io/badge/version-1.0.4-0071e3?style=flat-square)](https://github.com/ksh6940/Open-Schdule)
+[![Version](https://img.shields.io/badge/version-1.0.5-0071e3?style=flat-square)](https://github.com/ksh6940/Open-Schdule)
 [![License](https://img.shields.io/badge/License-Apache_2.0-34c759?style=flat-square)](./LICENSE)
 [![Backend](https://img.shields.io/badge/Rust-Axum_%2B_SQLite-000000?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Frontend](https://img.shields.io/badge/Electron-Apple_Design_System-47848F?style=flat-square&logo=electron)](https://www.electronjs.org/)
@@ -11,7 +11,7 @@
 
 ---
 
-## ✨ 주요 특징 (v1.04)
+## ✨ 주요 특징 (v1.05)
 
 ### 1. 프레임리스 Apple Design System UI & 업그레이드된 UX
 - **Frameless Liquid Glass 크롬**: OS 기본 제목 표시줄과 메뉴 표시줄을 제거하고, 드래그 이동 영역과 커스텀 윈도우 컨트롤(최소화·최대화/복원·닫기)이 통합된 53px 상단 Liquid Glass 네비게이션 바를 제공합니다.
@@ -53,7 +53,7 @@
 
 ```mermaid
 flowchart LR
-    subgraph Frontend["Electron Desktop GUI (Frameless v1.04)"]
+    subgraph Frontend["Electron Desktop GUI (Frameless v1.05)"]
         MainWin["메인 관리 윈도우\n(투두리스트 / 캘린더 뷰)"]
         OverlayWin["웹캠 핫존 드롭다운\n(Dynamic Island 오버레이)"]
     end
@@ -151,6 +151,12 @@ Windows에서 실행 중인 CLI가 들어 있는 폴더는 삭제할 수 없으�
 공유할 수 있는 `%APPDATA%\Electron` 캐시는 삭제하지 않습니다.
 기존 일정 삭제 명령 `openlab delete <ID>`는 그대로 사용할 수 있습니다.
 
+일정 JSON과 앱 데이터 폴더에 동일 날짜 파일이 모두 있으면 수정 시각이 더 최근인
+파일을 가져와 DB와 다른 복사본에 반영합니다. 두 파일을 동시에 편집하면 마지막
+수정본이 우선하므로 편집 전 백업하세요. 외부 JSON 변경은 실제 엔진의 일정 폴더와
+앱 데이터 일정 폴더를 감시해 화면을 갱신합니다. JSON은 항목을 병합하므로 파일에서
+항목을 제거하는 것만으로 DB의 해당 항목이 삭제되지는 않습니다.
+
 ### 3. 빌드된 `.exe` 실행 파일 위치
 
 `cargo build --release --workspace` 및 패키징 실행 시 다음 경로에 독립 실행 파일(`.exe`)이 생성됩니다:
@@ -168,7 +174,7 @@ Windows에서 실행 중인 CLI가 들어 있는 폴더는 삭제할 수 없으�
 ### 1. 대화형 셸 모드 (`openlab start -s`)
 
 ```text
-╭─── OpenLab Schedule v1.0.4 ──────────────────────────────────────────────╮
+╭─── OpenLab Schedule v1.0.5 ──────────────────────────────────────────────╮
 │                                                                          │
 │  ✻ Welcome to OpenLab Schedule CLI!                                      │
 │                                                                          │
