@@ -1058,6 +1058,20 @@
 }
 
 /* ── Settings & CLI Guide Tab ── */
+.hotzone-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.hotzone-settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--apple-secondary);
+}
+
 .tab-view-container {
   flex: 1;
   display: flex;

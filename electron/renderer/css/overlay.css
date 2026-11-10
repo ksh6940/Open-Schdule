@@ -33,8 +33,9 @@ body {
   padding: 16px 18px;
   gap: 12px;
   opacity: 0;
-  transform: translateY(-10px);
-  transition: opacity 0.16s ease, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top center;
+  transform: translateY(-8px) scaleY(0.94);
+  transition: opacity 0.16s ease, transform 0.22s ease-out;
   pointer-events: none;
 }
 
@@ -183,6 +184,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.overlay-error {
+  color: var(--apple-danger);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.overlay-error:empty {
+  display: none;
 }
 
 .overlay-item {

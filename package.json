@@ -1,7 +1,7 @@
 {
   "name": "openschedule",
-  "version": "1.0.2",
-  "description": "OpenSchedule v1.02 - Apple Design System 데스크톱 일정/투두 프로그램, 웹캠 핫존 드롭다운 & Claude Code 스타일 AI 연동 CLI",
+  "version": "1.0.3",
+  "description": "OpenSchedule v1.03 - Apple Design System 데스크톱 일정/투두 프로그램, 웹캠 핫존 드롭다운 & Claude Code 스타일 AI 연동 CLI",
   "main": "electron/main.js",
   "repository": {
     "type": "git",

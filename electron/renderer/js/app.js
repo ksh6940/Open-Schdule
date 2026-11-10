@@ -228,12 +228,8 @@ async function refreshAll(full = true) {
 
 async function performRefresh() {
   try {
-    const [smartCounts, categoryCounts, categories, allTodos] = await Promise.all([
-      api.getSmartCounts(),
-      api.getCategoryCounts(),
-      api.getCategories(),
-      api.getTodos({ date: 'all' }),
-    ]);
+    const { smart_counts: smartCounts, category_counts: categoryCounts,
+      categories, todos: allTodos } = await api.getDashboardData();
 
     state.smartCounts = smartCounts || { today: 0, scheduled: 0, all: 0, completed: 0 };
     state.categoryCounts = categoryCounts || {};
@@ -1201,28 +1197,54 @@ function setupCategoryModal() {
 // ── 설정 탭 ──
 async function setupSettings() {
   const checkHotzone = document.getElementById('setting-hotzone-enabled');
+  const fields = [
+    ['setting-hotzone-center', 'hotzone_center_percent', 50],
+    ['setting-hotzone-width', 'hotzone_width', 240],
+    ['setting-hotzone-height', 'hotzone_height', 4],
+    ['setting-hotzone-dwell', 'hotzone_dwell_ms', 150],
+  ];
+  const saveButton = document.getElementById('btn-save-hotzone');
 
   try {
     const s = await api.getSettings();
     if (s && checkHotzone) {
       checkHotzone.checked = s.hotzone_enabled !== false;
+      fields.forEach(([id, key, fallback]) => {
+        document.getElementById(id).value = s[key] == null ? fallback : s[key];
+      });
     }
   } catch (err) {
     console.warn('설정 로드 실패:', err);
+    showToast('핫존 설정을 불러오지 못했습니다');
   }
 
-  if (checkHotzone) {
-    checkHotzone.addEventListener('change', async () => {
-      try {
-        const s = await api.getSettings();
-        s.hotzone_enabled = checkHotzone.checked;
-        await api.saveSettings(s);
-        showToast('웹캠 핫존 설정이 저장되었습니다');
-      } catch (e) {
-        console.error(e);
+  saveButton.addEventListener('click', async () => {
+    for (const [id] of fields) {
+      const input = document.getElementById(id);
+      if (!input.value || !input.reportValidity()) return;
+    }
+    saveButton.disabled = true;
+    try {
+      const s = await api.getSettings();
+      s.hotzone_enabled = checkHotzone.checked;
+      fields.forEach(([id, key]) => { s[key] = Number(document.getElementById(id).value); });
+      await api.saveSettings(s);
+      const saved = await api.getSettings();
+      if (saved.hotzone_enabled !== s.hotzone_enabled ||
+          fields.some(([, key]) => saved[key] !== s[key])) {
+        throw new Error('핫존 설정이 저장되지 않았습니다. 엔진을 최신 버전으로 다시 시작하세요.');
       }
-    });
-  }
+      if (window.electronAPI && window.electronAPI.reloadHotzoneSettings) {
+        window.electronAPI.reloadHotzoneSettings();
+      }
+      showToast('웹캠 핫존 설정이 저장되었습니다');
+    } catch (err) {
+      console.error('핫존 설정 저장 실패:', err);
+      showToast('핫존 설정 저장 실패: 엔진을 확인하세요');
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
 }
 
 function escapeHtml(str) {

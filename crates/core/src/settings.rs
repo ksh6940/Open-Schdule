@@ -9,6 +9,7 @@ pub struct Settings {
     /// 논리 픽셀
     pub hotzone_width: f32,
     pub hotzone_height: f32,
+    pub hotzone_center_percent: f32,
     pub hotzone_dwell_ms: u64,
     pub hide_delay_ms: u64,
     pub panel_width: f32,
@@ -23,6 +24,7 @@ impl Default for Settings {
             hotzone_enabled: true,
             hotzone_width: 240.0,
             hotzone_height: 4.0,
+            hotzone_center_percent: 50.0,
             hotzone_dwell_ms: 150,
             hide_delay_ms: 400,
             panel_width: 420.0,
@@ -81,5 +83,28 @@ impl AgentInfo {
 
     pub fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_settings_receive_default_hotzone_center() {
+        let settings: Settings = serde_json::from_str(r#"{"hotzone_width":300}"#).unwrap();
+        assert_eq!(settings.hotzone_center_percent, 50.0);
+        assert_eq!(settings.hotzone_width, 300.0);
+    }
+
+    #[test]
+    fn hotzone_settings_round_trip() {
+        let settings = Settings {
+            hotzone_center_percent: 25.0,
+            hotzone_height: 20.0,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);
     }
 }

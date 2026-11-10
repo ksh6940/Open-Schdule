@@ -37,6 +37,7 @@ pub async fn start_api_server() -> anyhow::Result<(u16, String, tokio::task::Joi
         .route("/health", get(health_handler))
         .route("/api/sync", post(sync_handler))
         .route("/api/overlay", get(overlay_handler))
+        .route("/api/dashboard", get(dashboard_handler))
         // 투두 CRUD
         .route("/api/todos", get(list_todos_handler).post(create_todo_handler))
         .route(
@@ -136,6 +137,38 @@ async fn health_handler() -> &'static str {
 struct OverlayData {
     todos: Vec<Todo>,
     categories: Vec<Category>,
+}
+
+#[derive(Serialize)]
+struct DashboardData {
+    smart_counts: SmartCounts,
+    category_counts: HashMap<i64, usize>,
+    categories: Vec<Category>,
+    todos: Vec<Todo>,
+}
+
+fn dashboard_data(store: &Store) -> anyhow::Result<DashboardData> {
+    Ok(DashboardData {
+        smart_counts: store.smart_counts()?,
+        category_counts: store.category_counts()?,
+        categories: store.categories()?,
+        todos: store.query(&TodoQuery::default())?,
+    })
+}
+
+async fn dashboard_handler(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<DashboardData>, (StatusCode, String)> {
+    auth_check(&headers, &state).map_err(|(sc, msg)| (sc, msg.to_string()))?;
+    let data = tokio::task::spawn_blocking(|| {
+        let store = Store::open_default()?;
+        dashboard_data(&store)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(data))
 }
 
 fn overlay_data(store: &Store) -> anyhow::Result<OverlayData> {
@@ -530,5 +563,16 @@ mod tests {
             HeaderMap::new(),
         ).await;
         assert!(matches!(result, Err((StatusCode::UNAUTHORIZED, _))));
+    }
+
+    #[test]
+    fn dashboard_data_matches_individual_queries() {
+        let store = Store::open_in_memory().unwrap();
+        store.add(&TodoDraft::new("test", Local::now().date_naive())).unwrap();
+        let data = dashboard_data(&store).unwrap();
+        assert_eq!(data.smart_counts, store.smart_counts().unwrap());
+        assert_eq!(data.category_counts, store.category_counts().unwrap());
+        assert_eq!(data.categories, store.categories().unwrap());
+        assert_eq!(data.todos, store.query(&TodoQuery::default()).unwrap());
     }
 }

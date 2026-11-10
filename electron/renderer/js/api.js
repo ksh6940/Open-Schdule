@@ -6,6 +6,7 @@ class ApiClient {
     this.token = '';
     this.initialized = false;
     this.overlayEndpointAvailable = true;
+    this.dashboardEndpointAvailable = true;
   }
 
   init() {
@@ -87,6 +88,24 @@ class ApiClient {
       this.getCategories(),
     ]);
     return { todos, categories };
+  }
+
+  async getDashboardData() {
+    if (this.dashboardEndpointAvailable) {
+      try {
+        return await this.request('/api/dashboard');
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        this.dashboardEndpointAvailable = false;
+      }
+    }
+    const [smart_counts, category_counts, categories, todos] = await Promise.all([
+      this.getSmartCounts(),
+      this.getCategoryCounts(),
+      this.getCategories(),
+      this.getTodos({ date: 'all' }),
+    ]);
+    return { smart_counts, category_counts, categories, todos };
   }
 
   async getTodos(params = {}) {

@@ -53,3 +53,56 @@ test('overlay falls back to existing endpoints only when the combined endpoint i
   api.request = async () => { throw new Error('offline'); };
   await assert.rejects(api.getOverlayData(), /offline/);
 });
+
+test('duplicate status clicks are coalesced and the confirmed result renders immediately', async () => {
+  let resolveStatus;
+  let calls = 0;
+  let renders = 0;
+  const context = {
+    document: { addEventListener() {}, getElementById() { return null; } },
+    api: {
+      toggleStatus: () => {
+        calls++;
+        return new Promise(resolve => { resolveStatus = resolve; });
+      },
+    },
+    console,
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    countRender: () => { renders++; },
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'overlay.js'), 'utf8'), context);
+  vm.runInContext("renderOverlayList = countRender; renderProgressPill = () => {}; overlayTodos = [{id: 1, status: 'planned', due_date: getLocalDateStr()}]", context);
+  const first = vm.runInContext("updateOverlayStatus(overlayTodos[0], 'done')", context);
+  const second = vm.runInContext("updateOverlayStatus(overlayTodos[0], 'done')", context);
+  assert.equal(calls, 1);
+  const today = vm.runInContext('getLocalDateStr()', context);
+  resolveStatus({ id: 1, status: 'done', due_date: today, due_time: null });
+  await Promise.all([first, second]);
+  assert.equal(renders, 1);
+  assert.equal(vm.runInContext('overlayTodos[0].status', context), 'done');
+});
+
+test('dashboard fallback preserves existing engine compatibility', async () => {
+  let combinedCalls = 0;
+  const context = { window: {}, console, URLSearchParams };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'api.js'), 'utf8'), context);
+  const api = context.window.api;
+  api.request = async () => {
+    combinedCalls++;
+    const error = new Error('not found');
+    error.status = 404;
+    throw error;
+  };
+  api.getSmartCounts = async () => ({ today: 1 });
+  api.getCategoryCounts = async () => ({});
+  api.getCategories = async () => [];
+  api.getTodos = async () => [{ id: 1 }];
+  const data = await api.getDashboardData();
+  assert.equal(data.smart_counts.today, 1);
+  assert.equal(data.todos.length, 1);
+  await api.getDashboardData();
+  assert.equal(combinedCalls, 1);
+});

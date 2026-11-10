@@ -6,6 +6,10 @@ let overlayVisible = false;
 let overlayLoadPromise = null;
 let overlayLoadPending = false;
 let overlayRenderKey = null;
+let overlayRefreshTimer = null;
+let overlayRevision = 0;
+const overlayPendingTodos = new Set();
+let overlayAdding = false;
 
 function getLocalDateStr() {
   const d = new Date();
@@ -41,7 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (window.electronAPI.onRefreshData) {
       window.electronAPI.onRefreshData(() => {
-        if (overlayVisible) loadOverlayData();
+        if (overlayVisible) scheduleOverlayRefresh();
       });
     }
   }
@@ -76,9 +80,22 @@ async function loadOverlayData() {
   }
 }
 
+function scheduleOverlayRefresh() {
+  if (overlayRefreshTimer) clearTimeout(overlayRefreshTimer);
+  overlayRefreshTimer = setTimeout(() => {
+    overlayRefreshTimer = null;
+    if (overlayVisible) loadOverlayData();
+  }, 200);
+}
+
 async function performOverlayLoad() {
   try {
+    const revision = overlayRevision;
     const { todos, categories } = await api.getOverlayData();
+    if (revision !== overlayRevision) {
+      overlayLoadPending = true;
+      return;
+    }
 
     overlayTodos = todos || [];
     overlayCategories = categories || [];
@@ -91,6 +108,45 @@ async function performOverlayLoad() {
   } catch (err) {
     console.error('Failed to load overlay data:', err);
   }
+}
+
+function applyOverlayTodo(todo) {
+  const today = getLocalDateStr();
+  overlayTodos = overlayTodos.filter(item => item.id !== todo.id);
+  if (todo.due_date === today ||
+      (todo.due_date < today && todo.status !== 'done' && todo.status !== 'conditional_done')) {
+    overlayTodos.push(todo);
+  }
+  overlayTodos.sort((a, b) => a.due_date.localeCompare(b.due_date) ||
+    (a.due_time == null) - (b.due_time == null) ||
+    (a.due_time || '').localeCompare(b.due_time || '') || a.id - b.id);
+  overlayRenderKey = JSON.stringify([today, overlayTodos, overlayCategories]);
+  renderOverlayList();
+  renderProgressPill();
+}
+
+async function updateOverlayStatus(todo, next) {
+  if (overlayPendingTodos.has(todo.id)) return;
+  overlayPendingTodos.add(todo.id);
+  overlayRevision++;
+  try {
+    const updated = await api.toggleStatus(todo.id, next);
+    overlayRevision++;
+    applyOverlayTodo(updated);
+    scheduleOverlayRefresh();
+  } catch (err) {
+    overlayRevision++;
+    console.error('Failed to update overlay todo status:', err);
+    showOverlayError('상태를 변경하지 못했습니다.');
+    scheduleOverlayRefresh();
+  } finally {
+    overlayPendingTodos.delete(todo.id);
+  }
+}
+
+function showOverlayError(message) {
+  const error = document.getElementById('overlay-error');
+  if (error) error.textContent = message;
 }
 
 function renderProgressPill() {
@@ -185,12 +241,7 @@ function renderOverlayList() {
     const checkEl = row.querySelector('.apple-checkbox');
     checkEl.addEventListener('click', async () => {
       const next = todo.status === 'done' ? 'in_progress' : 'done';
-      try {
-        await api.toggleStatus(todo.id, next);
-        await loadOverlayData();
-      } catch (err) {
-        console.error('Failed to update overlay todo status:', err);
-      }
+      await updateOverlayStatus(todo, next);
     });
 
     const pillEl = row.querySelector('.status-pill');
@@ -202,12 +253,7 @@ function renderOverlayList() {
         done: 'planned',
       };
       const next = cycle[todo.status] || 'planned';
-      try {
-        await api.toggleStatus(todo.id, next);
-        await loadOverlayData();
-      } catch (err) {
-        console.error('Failed to update overlay todo status:', err);
-      }
+      await updateOverlayStatus(todo, next);
     });
 
     fragment.appendChild(row);
@@ -223,7 +269,7 @@ function setupQuickAdd() {
 
   const submit = async () => {
     const title = input.value.trim();
-    if (!title) return;
+    if (!title || overlayAdding) return;
 
     const todayStr = getLocalDateStr();
     const draft = {
@@ -236,13 +282,25 @@ function setupQuickAdd() {
       condition_note: '',
     };
 
+    overlayAdding = true;
+    if (btn) btn.disabled = true;
+    overlayRevision++;
     try {
-      await api.createTodo(draft);
-      input.value = '';
-      if (timeInput) timeInput.value = '';
-      await loadOverlayData();
+      const todo = await api.createTodo(draft);
+      overlayRevision++;
+      if (input.value.trim() === title) input.value = '';
+      if (timeInput && (timeInput.value || null) === draft.due_time) timeInput.value = '';
+      applyOverlayTodo(todo);
+      showOverlayError('');
+      scheduleOverlayRefresh();
     } catch (err) {
+      overlayRevision++;
       console.error('Failed to create todo in overlay:', err);
+      showOverlayError('일정을 추가하지 못했습니다.');
+      scheduleOverlayRefresh();
+    } finally {
+      overlayAdding = false;
+      if (btn) btn.disabled = false;
     }
   };
 

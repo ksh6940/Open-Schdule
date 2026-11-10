@@ -30,6 +30,43 @@ let leaveHotzoneAt = null;
 let isOverlayVisible = false;
 let overlayHideTimer = null;
 let overlayHideCanCancel = false;
+let hotzoneNeedsExit = false;
+let hotzoneSettings = {
+  enabled: true, width: 240, height: 4, centerPercent: 50, dwellMs: 150, hideDelayMs: 400,
+};
+
+function reloadHotzoneSettings() {
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const file = path.join(appData, 'OpenSchedule', 'settings.json');
+  if (!fs.existsSync(file)) return;
+  try {
+    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const number = (value, fallback, min, max) => {
+      if (value == null) return fallback;
+      if (!Number.isFinite(value) || value < min || value > max) {
+        throw new Error(`Invalid hotzone setting: ${value}`);
+      }
+      return value;
+    };
+    if (settings.hotzone_enabled != null && typeof settings.hotzone_enabled !== 'boolean') {
+      throw new Error('Invalid hotzone enabled setting');
+    }
+    hotzoneSettings = {
+      enabled: settings.hotzone_enabled !== false,
+      width: number(settings.hotzone_width, 240, 20, 4000),
+      height: number(settings.hotzone_height, 4, 1, 200),
+      centerPercent: number(settings.hotzone_center_percent, 50, 0, 100),
+      dwellMs: number(settings.hotzone_dwell_ms, 150, 0, 5000),
+      hideDelayMs: number(settings.hide_delay_ms, 400, 0, 10000),
+    };
+    hotzoneEnteredAt = null;
+    leaveHotzoneAt = null;
+    if (!hotzoneSettings.enabled && isOverlayVisible) hideOverlay();
+    if (overlayWindow && !overlayWindow.isDestroyed()) positionOverlay();
+  } catch (error) {
+    console.error('[Hotzone] Failed to load settings; keeping previous settings:', error);
+  }
+}
 
 function getAgentInfoPaths() {
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -190,6 +227,10 @@ function createMainWindow() {
     }
   });
 
+  mainWindow.on('show', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('refresh-data');
+  });
+
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -207,12 +248,23 @@ function createMainWindow() {
 }
 
 // 2. 상단 웹캠 핫존 드롭다운 오버레이 (Apple Dynamic Island Liquid Glass)
+function overlayX(bounds, width) {
+  const desired = bounds.x + bounds.width * hotzoneSettings.centerPercent / 100 - width / 2;
+  return Math.round(Math.max(bounds.x, Math.min(desired, bounds.x + bounds.width - width)));
+}
+
+function positionOverlay() {
+  const bounds = screen.getPrimaryDisplay().bounds;
+  const { width } = overlayWindow.getBounds();
+  overlayWindow.setPosition(overlayX(bounds, width), bounds.y);
+}
+
 function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { x: screenX, y: screenY, width: screenWidth } = primaryDisplay.bounds;
+  const { y: screenY } = primaryDisplay.bounds;
   const overlayWidth = 480;
   const overlayHeight = 440;
-  const x = screenX + Math.round((screenWidth - overlayWidth) / 2);
+  const x = overlayX(primaryDisplay.bounds, overlayWidth);
 
   overlayWindow = new BrowserWindow({
     width: overlayWidth,
@@ -239,6 +291,7 @@ function createOverlayWindow() {
   overlayWindow.webContents.on('did-finish-load', () => {
     if (overlayWindow && !overlayWindow.isDestroyed()) {
       overlayWindow.webContents.send('overlay-visibility', isOverlayVisible);
+      if (isOverlayVisible) overlayWindow.webContents.send('refresh-data');
     }
   });
 
@@ -248,7 +301,7 @@ function createOverlayWindow() {
 }
 
 function showOverlay() {
-  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow();
   if (overlayHideTimer) {
     clearTimeout(overlayHideTimer);
     overlayHideTimer = null;
@@ -269,7 +322,7 @@ function hideOverlay(canCancel = false) {
     overlayHideTimer = null;
     overlayHideCanCancel = false;
     if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
-  }, 180);
+  }, 230);
 }
 
 // 웹캠 상단 핫존 마우스 커서 폴링
@@ -278,11 +331,7 @@ function startHotzonePolling() {
   const updateDisplayBounds = () => {
     displayBounds = screen.getPrimaryDisplay().bounds;
     if (overlayWindow && !overlayWindow.isDestroyed()) {
-      const { width } = overlayWindow.getBounds();
-      overlayWindow.setPosition(
-        displayBounds.x + Math.round((displayBounds.width - width) / 2),
-        displayBounds.y
-      );
+      positionOverlay();
     }
   };
   screen.on('display-added', updateDisplayBounds);
@@ -290,17 +339,20 @@ function startHotzonePolling() {
   screen.on('display-metrics-changed', updateDisplayBounds);
 
   setInterval(() => {
-    if (!overlayWindow || overlayWindow.isDestroyed()) return;
+    if (!hotzoneSettings.enabled) return;
 
     const { x: screenX, y: screenY, width: screenWidth } = displayBounds;
     const cursor = screen.getCursorScreenPoint();
 
     // 웹캠 핫존: 화면 중앙 ±120px, 상단 Y <= 6px
-    const centerX = screenX + screenWidth / 2;
-    const inHotzone = cursor.y >= screenY && cursor.y <= screenY + 6 && Math.abs(cursor.x - centerX) <= 120;
+    const centerX = screenX + screenWidth * hotzoneSettings.centerPercent / 100;
+    const inHotzone = cursor.x >= screenX && cursor.x < screenX + screenWidth &&
+      cursor.y >= screenY && cursor.y < screenY + hotzoneSettings.height &&
+      Math.abs(cursor.x - centerX) <= hotzoneSettings.width / 2;
+    if (!inHotzone) hotzoneNeedsExit = false;
 
     let inOverlayArea = false;
-    if (isOverlayVisible || overlayHideTimer) {
+    if (overlayWindow && !overlayWindow.isDestroyed() && (isOverlayVisible || overlayHideTimer)) {
       const overlayBounds = overlayWindow.getBounds();
       inOverlayArea =
         cursor.x >= overlayBounds.x - 10 &&
@@ -321,10 +373,14 @@ function startHotzonePolling() {
 
     if (inHotzone) {
       leaveHotzoneAt = null;
-      if (!hotzoneEnteredAt) {
+      if (hotzoneNeedsExit) return;
+      if (hotzoneEnteredAt === null) {
         hotzoneEnteredAt = now;
-      } else if (now - hotzoneEnteredAt >= 150) {
+        if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow();
+      }
+      if (now - hotzoneEnteredAt >= hotzoneSettings.dwellMs) {
         if (!isOverlayVisible) {
+          hotzoneNeedsExit = true;
           showOverlay();
         }
       }
@@ -334,7 +390,7 @@ function startHotzonePolling() {
         if (!inOverlayArea) {
           if (!leaveHotzoneAt) {
             leaveHotzoneAt = now;
-          } else if (now - leaveHotzoneAt >= 350) {
+          } else if (now - leaveHotzoneAt >= hotzoneSettings.hideDelayMs) {
             hideOverlay(true);
           }
         } else {
@@ -374,7 +430,7 @@ function setupTray() {
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule v1.02');
+    tray.setToolTip('OpenSchedule v1.03');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {
@@ -433,21 +489,35 @@ ipcMain.on('hide-overlay', () => {
   hideOverlay();
 });
 
-// 앱 시작
-app.whenReady().then(() => {
-  ensureRustEngine();
-  createMainWindow();
-  createOverlayWindow();
-  setupTray();
-  startHotzonePolling();
-  startDbWatcher();
+ipcMain.on('reload-hotzone-settings', reloadHotzoneSettings);
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+// 앱 시작
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
     }
   });
-});
+  app.whenReady().then(() => {
+    reloadHotzoneSettings();
+    ensureRustEngine();
+    createMainWindow();
+    setupTray();
+    startHotzonePolling();
+    startDbWatcher();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
+    });
+  });
+}
 
 // CLI 등 외부 프로세스에서 SQLite DB 또는 schedules/*.json을 변경했을 때 실시간 감지하여 UI 갱신
 function startDbWatcher() {
@@ -455,10 +525,10 @@ function startDbWatcher() {
   const triggerRefresh = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
         mainWindow.webContents.send('refresh-data');
       }
-      if (overlayWindow && !overlayWindow.isDestroyed()) {
+      if (isOverlayVisible && overlayWindow && !overlayWindow.isDestroyed()) {
         overlayWindow.webContents.send('refresh-data');
       }
     }, 120);
@@ -471,6 +541,7 @@ function startDbWatcher() {
       fs.mkdirSync(dataDir, { recursive: true });
     }
     fs.watch(dataDir, (eventType, filename) => {
+      if (filename === 'settings.json') reloadHotzoneSettings();
       if (filename && (filename.startsWith('todos.db') || filename.startsWith('agent'))) {
         triggerRefresh();
       }

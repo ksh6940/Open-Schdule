@@ -5,7 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-async function startMain({ trayFails = false, existingAgent = false } = {}) {
+async function startMain({ trayFails = false, existingAgent = false, settings = null, lock = true } = {}) {
   const windows = [];
   const intervals = [];
   const timers = new Map();
@@ -15,6 +15,7 @@ async function startMain({ trayFails = false, existingAgent = false } = {}) {
   const ipc = new EventEmitter();
   ipc.handle = () => {};
   const app = new EventEmitter();
+  app.requestSingleInstanceLock = () => lock;
   app.whenReady = () => Promise.resolve();
   let quitCount = 0;
   app.quit = () => {
@@ -35,12 +36,14 @@ async function startMain({ trayFails = false, existingAgent = false } = {}) {
     setMenuBarVisibility() {}
     loadFile() {}
     isDestroyed() { return false; }
+    isVisible() { return this.visible; }
     hide() { this.visible = false; }
     show() { this.visible = true; }
     showInactive() { this.visible = true; }
     getBounds() { return this.options; }
     setPosition(x, y) { this.options.x = x; this.options.y = y; }
     focus() {}
+    isMinimized() { return false; }
     close() {
       let prevented = false;
       this.emit('close', { preventDefault: () => { prevented = true; } });
@@ -81,8 +84,8 @@ async function startMain({ trayFails = false, existingAgent = false } = {}) {
   let spawned = 0;
   let stopped;
   const mockFs = {
-    existsSync: file => existingAgent && file.endsWith('agent.json'),
-    readFileSync: () => JSON.stringify({ pid: 4321, port: 123, token: 'test' }),
+    existsSync: file => (existingAgent && file.endsWith('agent.json')) || (settings && file.endsWith('settings.json')),
+    readFileSync: file => file.endsWith('settings.json') ? JSON.stringify(settings) : JSON.stringify({ pid: 4321, port: 123, token: 'test' }),
     mkdirSync() {},
     watch() {},
   };
@@ -143,17 +146,19 @@ test('quitting does not terminate an independently running engine', async () => 
 
 test('overlay transitions on every show and cancels an automatic hide on re-entry', async () => {
   const main = await startMain({ existingAgent: true });
-  const overlay = main.windows[1];
-  assert.equal(overlay.options.hasShadow, false);
+  assert.equal(main.windows.length, 1);
   main.poll();
   main.advance(160);
   main.poll();
+  const overlay = main.windows[1];
+  assert.equal(overlay.options.x, 720);
+  assert.equal(overlay.options.hasShadow, false);
   assert.equal(overlay.visible, true);
   assert.deepEqual(overlay.messages.at(-2), ['overlay-visibility', true]);
 
   main.move({ x: 100, y: 500 });
   main.poll();
-  main.advance(360);
+  main.advance(410);
   main.poll();
   assert.deepEqual(overlay.messages.at(-1), ['overlay-visibility', false]);
   assert.equal(overlay.visible, true);
@@ -167,4 +172,54 @@ test('overlay transitions on every show and cancels an automatic hide on re-entr
   main.poll();
   main.runTimers();
   assert.equal(overlay.visible, false);
+});
+
+test('duplicate application exits before creating windows', async () => {
+  const main = await startMain({ lock: false });
+  assert.equal(main.getQuitCount(), 1);
+  assert.equal(main.windows.length, 0);
+  assert.equal(main.getSpawned(), 0);
+});
+
+test('custom hotzone uses configured location, dimensions and dwell time', async () => {
+  const main = await startMain({ existingAgent: true, settings: {
+    hotzone_enabled: true, hotzone_center_percent: 25, hotzone_width: 100,
+    hotzone_height: 20, hotzone_dwell_ms: 300,
+  } });
+  main.move({ x: 960, y: 1 });
+  main.poll();
+  main.advance(500);
+  main.poll();
+  assert.equal(main.windows.length, 1);
+  main.move({ x: 480, y: 10 });
+  main.poll();
+  assert.equal(main.windows.length, 2);
+  main.advance(299);
+  main.poll();
+  assert.equal(main.windows[1].visible, false);
+  main.advance(1);
+  main.poll();
+  const overlay = main.windows[1];
+  assert.equal(overlay.options.x, 240);
+  assert.equal(overlay.visible, true);
+  main.ipc.emit('hide-overlay');
+  main.runTimers();
+  main.advance(500);
+  main.poll();
+  assert.equal(overlay.visible, false);
+  main.move({ x: 480, y: 21 });
+  main.poll();
+  main.move({ x: 480, y: 10 });
+  main.poll();
+  main.advance(300);
+  main.poll();
+  assert.equal(overlay.visible, true);
+});
+
+test('disabled hotzone never opens', async () => {
+  const main = await startMain({ existingAgent: true, settings: { hotzone_enabled: false } });
+  main.poll();
+  main.advance(1000);
+  main.poll();
+  assert.equal(main.windows.length, 1);
 });
