@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, NaiveDate, NaiveTime};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use serde::{Deserialize, Serialize};
 
 /// 할 일 상태.
@@ -17,6 +17,10 @@ pub enum Status {
 }
 
 impl Status {
+    pub fn current(self) -> Status {
+        if self == Status::ConditionalDone { Status::Done } else { self }
+    }
+
     pub const ALL: [Status; 4] = [
         Status::Planned,
         Status::InProgress,
@@ -77,7 +81,7 @@ impl Status {
         match self {
             Status::Planned => Status::InProgress,
             Status::InProgress => Status::Done,
-            Status::Done => Status::ConditionalDone,
+            Status::Done => Status::Planned,
             Status::ConditionalDone => Status::Planned,
         }
     }
@@ -96,13 +100,28 @@ pub struct Category {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Subtask {
+    pub title: String,
+    #[serde(default)]
+    pub done: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Todo {
     pub id: i64,
     pub title: String,
     pub memo: String,
     pub category_id: Option<i64>,
     pub due_date: NaiveDate,
+    #[serde(default)]
+    pub end_date: Option<NaiveDate>,
     pub due_time: Option<NaiveTime>,
+    #[serde(default)]
+    pub reminder_at: Option<NaiveDateTime>,
+    #[serde(default)]
+    pub subtasks: Vec<Subtask>,
+    #[serde(default)]
+    pub priority: u8,
     pub status: Status,
     /// 조건부완료일 때의 조건 메모.
     pub condition_note: String,
@@ -112,7 +131,7 @@ pub struct Todo {
 
 impl Todo {
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
-        !self.status.is_finished() && self.due_date < today
+        !self.status.is_finished() && self.end_date.unwrap_or(self.due_date) < today
     }
 
     pub fn to_draft(&self) -> TodoDraft {
@@ -121,7 +140,11 @@ impl Todo {
             memo: self.memo.clone(),
             category_id: self.category_id,
             due_date: self.due_date,
+            end_date: self.end_date,
             due_time: self.due_time,
+            reminder_at: self.reminder_at,
+            subtasks: self.subtasks.clone(),
+            priority: self.priority,
             status: self.status,
             condition_note: self.condition_note.clone(),
         }
@@ -135,7 +158,15 @@ pub struct TodoDraft {
     pub memo: String,
     pub category_id: Option<i64>,
     pub due_date: NaiveDate,
+    #[serde(default)]
+    pub end_date: Option<NaiveDate>,
     pub due_time: Option<NaiveTime>,
+    #[serde(default)]
+    pub reminder_at: Option<NaiveDateTime>,
+    #[serde(default)]
+    pub subtasks: Vec<Subtask>,
+    #[serde(default)]
+    pub priority: u8,
     pub status: Status,
     pub condition_note: String,
 }
@@ -147,7 +178,11 @@ impl TodoDraft {
             memo: String::new(),
             category_id: None,
             due_date,
+            end_date: None,
             due_time: None,
+            reminder_at: None,
+            subtasks: Vec::new(),
+            priority: 0,
             status: Status::Planned,
             condition_note: String::new(),
         }

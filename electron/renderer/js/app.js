@@ -7,11 +7,11 @@ const state = {
   currentFilter: 'today', // 'today', 'scheduled', 'all', 'completed'
   selectedCategoryId: null,
   searchQuery: '',
-  filterStatus: null, // 'planned', 'in_progress', 'conditional_done', 'done'
 
   calendarYear: nowInit.getFullYear(),
   calendarMonth: nowInit.getMonth() + 1, // 1..12
   selectedCalendarDate: getLocalDateStr(0),
+  calendarRangeEnd: null,
   allTodosCache: [],
 
   todos: [],
@@ -28,6 +28,12 @@ let searchDebounceTimeout = null;
 let todoLoadRequestId = 0;
 let refreshPromise = null;
 let refreshPending = false;
+let hasDashboardSnapshot = false;
+
+function todoDisplayKey(todos) {
+  return JSON.stringify(todos, (key, value) =>
+    key === 'created_at' || key === 'updated_at' ? undefined : value);
+}
 
 function showToast(message) {
   const toast = document.getElementById('apple-toast');
@@ -69,11 +75,11 @@ function addDaysToDateStr(dateStr, days) {
 document.addEventListener('DOMContentLoaded', async () => {
   setupWindowControls();
   setupNavigation();
+  setupSidebarToggle();
   setupViewModeSwitch();
   setupCalendarControls();
+  setupCalendarSelection();
   setupSmartCards();
-  setupStatusFilters();
-  setupQuickAdd();
   setupNewTodoModal();
   setupInspector();
   setupCategoryModal();
@@ -85,10 +91,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const todayNum = new Date().getDate();
   const dayIcon = document.getElementById('today-day-icon');
   if (dayIcon) dayIcon.textContent = todayNum;
-
-  // 인라인 날짜 초기값 오늘로 설정
-  const quickDate = document.getElementById('quick-add-date');
-  if (quickDate) quickDate.value = getLocalDateStr(0);
 
   // IPC 이벤트 수신 (엔진 준비 완료 또는 CLI/외부 데이터 변경)
   if (window.electronAPI) {
@@ -107,6 +109,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   await initEngineConnection();
 
 });
+
+function setupSidebarToggle() {
+  const button = document.getElementById('btn-toggle-sidebar');
+  const expandButton = document.getElementById('btn-expand-sidebar');
+  if (!button || !expandButton) return;
+
+  button.addEventListener('click', () => {
+    setSidebarExpanded(false);
+    expandButton.focus();
+  });
+  expandButton.addEventListener('click', () => {
+    setSidebarExpanded(true);
+    button.focus();
+  });
+}
+
+function setSidebarExpanded(expanded) {
+  const main = document.getElementById('tab-reminders');
+  if (!main) return;
+  main.classList.toggle('sidebar-collapsed', !expanded);
+  document.querySelectorAll('[aria-controls="reminders-sidebar"]').forEach(button => {
+    button.setAttribute('aria-expanded', String(expanded));
+  });
+}
 
 // ── 프레임리스 윈도우 컨트롤 ──
 function setupWindowControls() {
@@ -158,8 +184,11 @@ function setupWindowControls() {
 // ── 전역 키보드 단축키 ──
 function setupGlobalShortcuts() {
   document.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented) return;
     const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
     const isTyping = activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select';
+    const home = document.getElementById('tab-reminders');
+    if (home && home.style.display === 'none') return;
 
     if ((e.ctrlKey || e.metaKey) && e.key === '1') {
       e.preventDefault();
@@ -169,20 +198,29 @@ function setupGlobalShortcuts() {
       switchViewMode('calendar');
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
+      const todoModal = document.getElementById('modal-add-todo');
       const inspector = document.getElementById('inspector-panel');
-      if (inspector && !inspector.classList.contains('hidden')) {
-        document.getElementById('btn-save-inspect').click();
-      } else {
+      if (todoModal && !todoModal.classList.contains('hidden')) {
+        document.getElementById('btn-confirm-todo-modal').click();
+      } else if (!inspector || inspector.classList.contains('hidden')) {
         document.getElementById('btn-sync-json').click();
       }
     } else if (!isTyping && e.key === '/') {
       e.preventDefault();
       const searchInput = document.getElementById('search-input');
+      setSidebarExpanded(true);
       if (searchInput) searchInput.focus();
     } else if (e.key === 'Escape') {
+      const todoModal = document.getElementById('modal-add-todo');
+      if (todoModal && !todoModal.classList.contains('hidden')) return;
       const inspector = document.getElementById('inspector-panel');
       if (inspector && !inspector.classList.contains('hidden')) {
         document.getElementById('btn-close-inspector').click();
+      } else {
+        const calendarPanel = document.getElementById('calendar-day-panel');
+        if (calendarPanel && !calendarPanel.classList.contains('hidden')) {
+          document.getElementById('btn-close-calendar-panel').click();
+        }
       }
     }
   });
@@ -202,6 +240,7 @@ async function initEngineConnection() {
       pill.innerHTML = '<i class="ph-fill ph-circle"></i> 연결됨';
     }
     await refreshAll(true);
+    await loadSettings();
   } else {
     if (pill) {
       pill.className = 'status-pill planned';
@@ -233,6 +272,12 @@ async function performRefresh() {
     const params = getTodoParams();
     const { smart_counts: smartCounts, category_counts: categoryCounts,
       categories, todos: allTodos, filtered_todos: filteredTodos } = await api.getDashboardData(params);
+    const categoriesChanged = !hasDashboardSnapshot ||
+      JSON.stringify(state.categories) !== JSON.stringify(categories || []);
+    const countsChanged = !hasDashboardSnapshot ||
+      JSON.stringify(state.categoryCounts) !== JSON.stringify(categoryCounts || {});
+    const calendarChanged = !hasDashboardSnapshot ||
+      todoDisplayKey(state.allTodosCache) !== todoDisplayKey(allTodos || []);
 
     const pill = document.getElementById('connection-status-pill');
     if (pill) {
@@ -245,22 +290,25 @@ async function performRefresh() {
     state.allTodosCache = allTodos || [];
 
     renderSmartCounts();
-    renderCategories();
-    updateCategorySelect();
+    if (categoriesChanged || countsChanged) renderCategories();
+    if (categoriesChanged) updateCategorySelect();
 
-    if (state.viewMode === 'calendar') {
+    if (state.viewMode === 'calendar' && (calendarChanged || categoriesChanged)) {
       renderCalendarGrid();
+      renderCalendarDayPanel();
     }
 
     if (requestId === todoLoadRequestId) {
       if (Array.isArray(filteredTodos)) {
+        const todosChanged = !hasDashboardSnapshot ||
+          todoDisplayKey(state.todos) !== todoDisplayKey(filteredTodos);
         state.todos = filteredTodos;
-        renderTodoList();
-        updateScheduleFileIndicator();
+        if (todosChanged || categoriesChanged) renderTodoList();
       } else {
-        await loadTodos();
+        await loadTodos(!hasDashboardSnapshot || categoriesChanged);
       }
     }
+    hasDashboardSnapshot = true;
   } catch (err) {
     console.error('Failed to refresh data:', err);
     const pill = document.getElementById('connection-status-pill');
@@ -291,13 +339,10 @@ function getTodoParams() {
     params.search = state.searchQuery.trim();
   }
 
-  if (state.filterStatus) {
-    params.status = state.filterStatus;
-  }
   return params;
 }
 
-async function loadTodos() {
+async function loadTodos(forceRender = false) {
   if (searchDebounceTimeout) {
     clearTimeout(searchDebounceTimeout);
     searchDebounceTimeout = null;
@@ -308,9 +353,10 @@ async function loadTodos() {
   try {
     const todos = await api.getTodos(params);
     if (requestId !== todoLoadRequestId) return;
-    state.todos = todos || [];
-    renderTodoList();
-    updateScheduleFileIndicator();
+    const nextTodos = todos || [];
+    const changed = todoDisplayKey(state.todos) !== todoDisplayKey(nextTodos);
+    state.todos = nextTodos;
+    if (changed || forceRender || !hasDashboardSnapshot) renderTodoList();
   } catch (err) {
     if (requestId === todoLoadRequestId) {
       console.error('Failed to load todos:', err);
@@ -318,22 +364,11 @@ async function loadTodos() {
   }
 }
 
-function updateScheduleFileIndicator() {
-  const indicator = document.getElementById('schedule-file-indicator');
-  const calBadge = document.getElementById('cal-json-badge');
-  const activeDate = state.viewMode === 'calendar' ? state.selectedCalendarDate : getLocalDateStr(0);
-
-  if (indicator) {
-    indicator.innerHTML = `<i class="ph ph-file-js"></i> schedules/${activeDate}_schedule.json 자동 동기화`;
-  }
-  if (calBadge) {
-    calBadge.textContent = `schedules/${state.selectedCalendarDate}_schedule.json`;
-  }
-}
-
 // ── [투두리스트 / 캘린더 뷰] 모드 전환 ──
 function switchViewMode(mode) {
   state.viewMode = mode;
+  document.getElementById('tab-reminders').classList.toggle('calendar-mode', mode === 'calendar');
+  updateInspectorPresentation();
   const btns = document.querySelectorAll('#view-mode-switch .view-mode-btn');
   const calBox = document.getElementById('calendar-view-box');
 
@@ -341,11 +376,10 @@ function switchViewMode(mode) {
 
   if (mode === 'calendar') {
     calBox.classList.remove('hidden');
-    const quickDate = document.getElementById('quick-add-date');
-    if (quickDate) quickDate.value = state.selectedCalendarDate;
     renderCalendarGrid();
   } else {
     calBox.classList.add('hidden');
+    document.getElementById('calendar-day-panel').classList.add('hidden');
   }
 
   updateViewTitle();
@@ -364,7 +398,6 @@ function setupViewModeSwitch() {
 // ── 월간 캘린더 컨트롤 & 그리드 렌더링 ──
 function setupCalendarControls() {
   const btnPrev = document.getElementById('btn-cal-prev');
-  const btnToday = document.getElementById('btn-cal-today');
   const btnNext = document.getElementById('btn-cal-next');
 
   if (btnPrev) {
@@ -391,102 +424,176 @@ function setupCalendarControls() {
     });
   }
 
-  if (btnToday) {
-    btnToday.addEventListener('click', () => {
-      const now = new Date();
-      state.calendarYear = now.getFullYear();
-      state.calendarMonth = now.getMonth() + 1;
-      state.selectedCalendarDate = getLocalDateStr(0);
-      const quickDate = document.getElementById('quick-add-date');
-      if (quickDate) quickDate.value = state.selectedCalendarDate;
-      renderCalendarGrid();
-      updateViewTitle();
-      loadTodos();
+}
+
+function formatCalendarDate(value) {
+  const [year, month, day] = value.split('-').map(Number);
+  const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(year, month - 1, day).getDay()];
+  return `${month}월 ${day}일 (${weekday})`;
+}
+
+function showCalendarDate(start, end = start) {
+  const [first, last] = [start, end].sort();
+  state.selectedCalendarDate = first;
+  state.calendarRangeEnd = last;
+  const [year, month] = first.split('-').map(Number);
+  state.calendarYear = year;
+  state.calendarMonth = month;
+  document.getElementById('inspector-panel').classList.add('hidden');
+  state.selectedTodo = null;
+  document.getElementById('calendar-day-panel').classList.remove('hidden');
+  renderCalendarGrid();
+  renderCalendarDayPanel();
+  updateViewTitle();
+  loadTodos();
+}
+
+function renderCalendarDayPanel() {
+  const panel = document.getElementById('calendar-day-panel');
+  if (!panel || panel.classList.contains('hidden')) return;
+  const start = state.selectedCalendarDate;
+  const end = state.calendarRangeEnd || start;
+  document.getElementById('calendar-panel-date').textContent = start === end
+    ? formatCalendarDate(start) : `${formatCalendarDate(start)} ~ ${formatCalendarDate(end)}`;
+  const list = document.getElementById('calendar-panel-list');
+  list.replaceChildren();
+  state.allTodosCache.filter(todo => todo.due_date <= end && (todo.end_date || todo.due_date) >= start).forEach(todo => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'calendar-panel-item';
+    button.textContent = `${todo.due_date === start && start === end ? '' : `${todo.due_date} · `}${todo.title}`;
+    button.addEventListener('click', () => {
+      panel.classList.add('hidden');
+      openInspector(todo);
     });
-  }
+    list.appendChild(button);
+  });
+}
+
+function setupCalendarSelection() {
+  const grid = document.getElementById('calendar-days-grid');
+  const panel = document.getElementById('calendar-day-panel');
+  let drag = null;
+  let lastClick = null;
+
+  grid.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.target.closest('[data-todo-id]')) {
+      lastClick = null;
+      return;
+    }
+    const cell = event.target.closest('[data-calendar-date]');
+    if (!cell) return;
+    drag = { start: cell.dataset.calendarDate, end: cell.dataset.calendarDate, pointerId: event.pointerId,
+      x: event.clientX, y: event.clientY };
+    grid.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  grid.addEventListener('pointermove', event => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    const cell = target && target.closest('[data-calendar-date]');
+    if (!cell || !grid.contains(cell)) return;
+    drag.end = cell.dataset.calendarDate;
+    const [start, end] = [drag.start, drag.end].sort();
+    grid.querySelectorAll('[data-calendar-date]').forEach(day => {
+      day.classList.toggle('selected', day.dataset.calendarDate >= start && day.dataset.calendarDate <= end);
+    });
+  });
+  grid.addEventListener('pointerup', event => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const selection = drag;
+    drag = null;
+    const singleDate = selection.start === selection.end;
+    const doubleClick = singleDate && lastClick && lastClick.date === selection.start &&
+      event.timeStamp - lastClick.time < 500 && event.timeStamp >= lastClick.time &&
+      Math.hypot(selection.x - lastClick.x, selection.y - lastClick.y) <= 8;
+    lastClick = singleDate && !doubleClick
+      ? { date: selection.start, time: event.timeStamp, x: selection.x, y: selection.y } : null;
+    showCalendarDate(selection.start, selection.end);
+    if (!singleDate || doubleClick) document.getElementById('btn-calendar-add-details').click();
+  });
+  grid.addEventListener('pointercancel', () => {
+    drag = null;
+    lastClick = null;
+    renderCalendarGrid();
+  });
+  document.getElementById('btn-close-calendar-panel').addEventListener('click', () => panel.classList.add('hidden'));
+  document.getElementById('btn-calendar-add-details').addEventListener('click', () => {
+    document.getElementById('btn-open-new-todo-modal').click();
+  });
 }
 
 function renderCalendarGrid() {
-  const label = document.getElementById('cal-month-label');
   const grid = document.getElementById('calendar-days-grid');
-  if (!grid || !label) return;
+  if (!grid) return;
 
   const year = state.calendarYear;
   const month = state.calendarMonth;
-  label.textContent = `${year}년 ${month}월`;
+  updateViewTitle();
 
   const firstDay = new Date(year, month - 1, 1);
-  const startOffset = firstDay.getDay();
+  const startOffset = (firstDay.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month, 0).getDate();
   const todayStr = getLocalDateStr(0);
-
-  const byDate = {};
-  state.allTodosCache.forEach(t => {
-    if (!byDate[t.due_date]) byDate[t.due_date] = [];
-    byDate[t.due_date].push(t);
-  });
 
   grid.innerHTML = '';
 
   const totalSlots = Math.ceil((startOffset + daysInMonth) / 7) * 7;
   for (let idx = 0; idx < totalSlots; idx++) {
     const cell = document.createElement('div');
-    if (idx < startOffset || idx >= startOffset + daysInMonth) {
-      cell.className = 'cal-day-cell empty';
-      grid.appendChild(cell);
-      continue;
-    }
-
-    const dayNum = idx - startOffset + 1;
-    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+    const date = new Date(year, month - 1, idx - startOffset + 1);
+    const dayNum = date.getDate();
+    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
     const dow = idx % 7;
 
     let cls = 'cal-day-cell';
-    if (dow === 0) cls += ' sun';
-    if (dow === 6) cls += ' sat';
+    if (date.getMonth() !== month - 1) cls += ' outside-month';
+    if (dow === 6) cls += ' sun';
+    if (dow === 5) cls += ' sat';
     if (dateStr === todayStr) cls += ' today';
-    if (dateStr === state.selectedCalendarDate) cls += ' selected';
+    const selectedEnd = state.calendarRangeEnd || state.selectedCalendarDate;
+    if (dateStr >= state.selectedCalendarDate && dateStr <= selectedEnd) cls += ' selected';
     cell.className = cls;
+    cell.dataset.calendarDate = dateStr;
+    cell.tabIndex = 0;
+    cell.setAttribute('role', 'group');
+    cell.setAttribute('aria-label', dateStr);
 
-    const dayTodos = byDate[dateStr] || [];
-    const totalCount = dayTodos.length;
-    const doneCount = dayTodos.filter(t => t.status === 'done' || t.status === 'conditional_done').length;
-
-    let badgeHtml = '';
-    if (totalCount > 0) {
-      const allDone = doneCount === totalCount;
-      badgeHtml = `<span class="cal-day-badge ${allDone ? 'all-done' : ''}">${doneCount}/${totalCount}</span>`;
-    }
-
-    let previewHtml = '';
-    dayTodos.slice(0, 2).forEach(t => {
-      const isDone = t.status === 'done' || t.status === 'conditional_done';
-      previewHtml += `<div class="cal-day-item-dot ${isDone ? 'done' : ''}">• ${escapeHtml(t.title)}</div>`;
-    });
-
+    const dayTodos = state.allTodosCache.filter(t => t.due_date <= dateStr && (t.end_date || t.due_date) >= dateStr);
     cell.innerHTML = `
       <div class="cal-day-top">
         <span class="cal-day-num">${dayNum}</span>
-        ${badgeHtml}
       </div>
-      <div class="cal-day-preview">
-        ${previewHtml}
-      </div>
+      <div class="cal-day-preview"></div>
     `;
-
-    cell.addEventListener('click', () => {
-      state.selectedCalendarDate = dateStr;
-      const quickDate = document.getElementById('quick-add-date');
-      if (quickDate) quickDate.value = dateStr;
-      renderCalendarGrid();
-      updateViewTitle();
-      loadTodos();
+    const preview = cell.querySelector('.cal-day-preview');
+    dayTodos.slice(0, 2).forEach(todo => {
+      const button = document.createElement('button');
+      const category = state.categories.find(cat => cat.id === todo.category_id);
+      const color = category && Number.isInteger(category.color) && category.color >= 0 && category.color <= 0xffffff
+        ? category.color : 0x8e9bad;
+      button.type = 'button';
+      button.className = `cal-day-item-dot ${todo.status === 'done' || todo.status === 'conditional_done' ? 'done' : ''}`;
+      button.dataset.todoId = todo.id;
+      button.textContent = todo.title;
+      button.title = todo.title;
+      button.style.setProperty('--event-color', `#${color.toString(16).padStart(6, '0')}`);
+      button.addEventListener('click', event => {
+        event.stopPropagation();
+        document.getElementById('calendar-day-panel').classList.add('hidden');
+        openInspector(todo);
+      });
+      button.addEventListener('dblclick', event => event.stopPropagation());
+      preview.appendChild(button);
     });
 
-    cell.addEventListener('dblclick', () => {
-      state.selectedCalendarDate = dateStr;
-      const btnOpen = document.getElementById('btn-open-new-todo-modal');
-      if (btnOpen) btnOpen.click();
+    cell.addEventListener('keydown', event => {
+      if (event.target === cell && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        showCalendarDate(dateStr);
+        const selectedCell = grid.querySelector(`[data-calendar-date="${dateStr}"]`);
+        if (selectedCell) selectedCell.focus();
+      }
     });
 
     grid.appendChild(cell);
@@ -510,17 +617,38 @@ function setupSyncButton() {
 
 // ── 네비게이션 탭 ──
 function setupNavigation() {
-  const tabBtns = document.querySelectorAll('.nav-tab-btn');
-  tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      tabBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+  const viewToggle = document.getElementById('btn-toggle-settings');
+  const aiToggle = document.getElementById('btn-ai');
+  const remindersView = document.getElementById('tab-reminders');
+  const settingsView = document.getElementById('tab-settings');
+  const aiView = document.getElementById('tab-ai');
+  const brand = document.getElementById('nav-brand-name');
+  const back = document.getElementById('btn-settings-back');
 
-      const target = btn.dataset.tab;
-      document.getElementById('tab-reminders').style.display = target === 'reminders' ? 'flex' : 'none';
-      document.getElementById('tab-settings').style.display = target === 'settings' ? 'flex' : 'none';
+  if (viewToggle && aiToggle && remindersView && settingsView && aiView && brand && back) {
+    let activePage = 'home';
+    const showPage = page => {
+      activePage = page;
+      remindersView.style.display = page === 'home' ? 'flex' : 'none';
+      settingsView.style.display = page === 'settings' ? 'flex' : 'none';
+      aiView.style.display = page === 'ai' ? 'flex' : 'none';
+      brand.hidden = page !== 'home';
+      back.hidden = page === 'home';
+      viewToggle.setAttribute('aria-pressed', String(page === 'settings'));
+      aiToggle.setAttribute('aria-pressed', String(page === 'ai'));
+    };
+    viewToggle.addEventListener('click', () => {
+      showPage(activePage === 'settings' ? 'home' : 'settings');
     });
-  });
+    aiToggle.addEventListener('click', () => {
+      showPage(activePage === 'ai' ? 'home' : 'ai');
+    });
+    back.addEventListener('click', () => {
+      const returnButton = activePage === 'ai' ? aiToggle : viewToggle;
+      showPage('home');
+      returnButton.focus();
+    });
+  }
 
   const searchInput = document.getElementById('search-input');
   const clearSearchButton = document.getElementById('btn-clear-search');
@@ -581,6 +709,9 @@ function selectSmartFilter(filterName) {
 
   if (state.viewMode === 'calendar') {
     state.viewMode = 'list';
+    document.getElementById('tab-reminders').classList.remove('calendar-mode');
+    document.getElementById('calendar-day-panel').classList.add('hidden');
+    updateInspectorPresentation();
     document.querySelectorAll('#view-mode-switch .view-mode-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.mode === 'list');
     });
@@ -603,7 +734,7 @@ function updateViewTitle() {
   if (!titleEl) return;
 
   if (state.viewMode === 'calendar') {
-    titleEl.textContent = `${state.selectedCalendarDate}`;
+    titleEl.textContent = `${state.calendarYear}년 ${state.calendarMonth}월`;
     titleEl.style.color = 'var(--apple-foreground)';
     return;
   }
@@ -634,25 +765,6 @@ function updateViewTitle() {
   }
 }
 
-// ── 4대 상태 필터 알약 ──
-function setupStatusFilters() {
-  const pills = document.querySelectorAll('#status-filter-pills .status-pill');
-  pills.forEach(pill => {
-    pill.addEventListener('click', () => {
-      const status = pill.dataset.status;
-      if (state.filterStatus === status) {
-        state.filterStatus = null;
-        pill.classList.remove('active');
-      } else {
-        pills.forEach(p => p.classList.remove('active'));
-        state.filterStatus = status;
-        pill.classList.add('active');
-      }
-      loadTodos();
-    });
-  });
-}
-
 // ── 카테고리 렌더링 ──
 function renderCategories() {
   const container = document.getElementById('category-lists');
@@ -663,7 +775,8 @@ function renderCategories() {
     const count = state.categoryCounts[cat.id] || 0;
     const colorHex = `#${cat.color.toString(16).padStart(6, '0')}`;
 
-    const item = document.createElement('div');
+    const item = document.createElement('button');
+    item.type = 'button';
     item.className = `list-item ${state.selectedCategoryId === cat.id ? 'active' : ''}`;
     item.innerHTML = `
       <div class="list-item-left">
@@ -681,11 +794,12 @@ function renderCategories() {
       state.selectedCategoryId = cat.id;
       state.currentFilter = null;
 
-      const quickCat = document.getElementById('quick-add-category');
-      if (quickCat) quickCat.value = String(cat.id);
-
-      updateViewTitle();
-      loadTodos();
+      if (state.viewMode === 'calendar') {
+        switchViewMode('list');
+      } else {
+        updateViewTitle();
+        loadTodos();
+      }
     });
 
     container.appendChild(item);
@@ -694,8 +808,6 @@ function renderCategories() {
 
 function updateCategorySelect() {
   const selects = [
-    document.getElementById('inspect-category'),
-    document.getElementById('quick-add-category'),
     document.getElementById('modal-todo-category'),
   ];
 
@@ -713,132 +825,262 @@ function updateCategorySelect() {
   });
 }
 
-// ── 인라인 일정 추가 ──
-function setupQuickAdd() {
-  const input = document.getElementById('quick-add-input');
-  const dateInput = document.getElementById('quick-add-date');
-  const timeInput = document.getElementById('quick-add-time');
-  const catSelect = document.getElementById('quick-add-category');
-  const memoInput = document.getElementById('quick-add-memo');
-  const btn = document.getElementById('btn-quick-add');
-
-  // 인라인 원클릭 날짜 칩 (오늘, 내일, +1주)
-  document.querySelectorAll('[data-inline-date]').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const offset = parseInt(chip.dataset.inlineDate, 10) || 0;
-      if (dateInput) dateInput.value = getLocalDateStr(offset);
+function createSubtaskEditor(container) {
+  const list = container.querySelector('.subtask-list');
+  const input = container.querySelector('.subtask-input');
+  const addButton = container.querySelector('.subtask-add');
+  let items = [];
+  const render = () => {
+    list.replaceChildren();
+    items.forEach((item, index) => {
+      const row = document.createElement('div');
+      row.className = 'subtask-row';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = item.done;
+      checkbox.setAttribute('aria-label', `${item.title} 완료`);
+      checkbox.addEventListener('change', () => { item.done = checkbox.checked; });
+      const text = document.createElement('span');
+      text.textContent = item.title;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'subtask-remove';
+      const icon = document.createElement('i');
+      icon.className = 'ph ph-x';
+      icon.setAttribute('aria-hidden', 'true');
+      remove.appendChild(icon);
+      remove.setAttribute('aria-label', `${item.title} 삭제`);
+      remove.addEventListener('click', () => { items.splice(index, 1); render(); });
+      row.append(checkbox, text, remove);
+      list.appendChild(row);
     });
-  });
-
-  const submit = async () => {
+  };
+  const addPending = () => {
     const title = input.value.trim();
-    if (!title) {
-      input.focus();
-      return;
-    }
-
-    const defaultDate = state.viewMode === 'calendar' ? state.selectedCalendarDate : getLocalDateStr(0);
-    const dueDate = (dateInput && dateInput.value) ? dateInput.value : defaultDate;
-    const dueTime = (timeInput && timeInput.value) ? timeInput.value : null;
-    const catId = (catSelect && catSelect.value)
-      ? parseInt(catSelect.value, 10)
-      : state.selectedCategoryId;
-    const memo = (memoInput && memoInput.value) ? memoInput.value.trim() : '';
-
-    const draft = {
-      title,
-      memo,
-      category_id: catId || null,
-      due_date: dueDate,
-      due_time: dueTime,
-      status: 'planned',
-      condition_note: '',
-    };
-
-    try {
-      await api.createTodo(draft);
+    if (title) {
+      items.push({ title, done: false });
       input.value = '';
-      if (memoInput) memoInput.value = '';
-      if (timeInput) timeInput.value = '';
-
-      const todayStr = getLocalDateStr(0);
-      if (state.viewMode === 'list' && state.selectedCategoryId == null && state.currentFilter === 'today' && dueDate > todayStr) {
-        selectSmartFilter('scheduled');
-      } else if (state.viewMode === 'calendar') {
-        state.selectedCalendarDate = dueDate;
-      }
-
-      await refreshAll(false);
-      showToast(`"${title}" 일정이 추가되었습니다 (${dueDate})`);
-    } catch (err) {
-      console.error('Failed to create todo:', err);
-      showToast(`일정 추가 실패: ${err.message}`);
+      render();
     }
   };
-
-  if (input) {
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submit();
-      }
-    });
-  }
-
-  if (memoInput) {
-    memoInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submit();
-      }
-    });
-  }
-
-  if (btn) {
-    btn.addEventListener('click', submit);
-  }
+  addButton.addEventListener('click', addPending);
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addPending();
+    }
+  });
+  return {
+    set(value) {
+      items = (value || []).map(item => ({ title: item.title, done: item.done }));
+      input.value = '';
+      render();
+    },
+    get() {
+      addPending();
+      return items.map(item => ({ ...item }));
+    },
+  };
 }
 
-// ── 새 일정 추가 모달 (상세 등록 & Ctrl+N) ──
+let openTodoEditor = null;
+
+// ── 일정 추가 및 수정 모달 ──
 function setupNewTodoModal() {
   const modal = document.getElementById('modal-add-todo');
   const btnOpen = document.getElementById('btn-open-new-todo-modal');
   const btnClose = document.getElementById('btn-close-todo-modal');
-  const btnCancel = document.getElementById('btn-cancel-todo-modal');
   const btnConfirm = document.getElementById('btn-confirm-todo-modal');
 
   const titleInput = document.getElementById('modal-todo-title');
   const dateInput = document.getElementById('modal-todo-date');
+  const endDateInput = document.getElementById('modal-todo-end-date');
   const timeInput = document.getElementById('modal-todo-time');
+  const subtasks = createSubtaskEditor(document.getElementById('modal-subtasks'));
   const catSelect = document.getElementById('modal-todo-category');
-  const statusSelect = document.getElementById('modal-todo-status');
+  const prioritySelect = document.getElementById('modal-todo-priority');
   const memoInput = document.getElementById('modal-todo-memo');
+  const dateSummary = document.getElementById('modal-date-summary');
+  const timeSummary = document.getElementById('modal-time-summary');
+  const calendarGrid = document.getElementById('modal-calendar-grid');
+  const calendarMonth = document.getElementById('modal-calendar-month');
+  const modeButtons = Array.from(modal.querySelectorAll('[data-date-mode]'));
+  const toolButtons = Array.from(modal.querySelectorAll('.todo-tool-button'));
+  let pickerMonth = new Date();
+  let dateMode = 'single';
+  let selectingRangeEnd = false;
+  let editingTodo = null;
+  let returnFocus = null;
 
-  const openModal = () => {
-    titleInput.value = '';
-    dateInput.value = state.viewMode === 'calendar' ? state.selectedCalendarDate : getLocalDateStr(0);
-    timeInput.value = '';
-    catSelect.value = state.selectedCategoryId != null ? String(state.selectedCategoryId) : '';
-    statusSelect.value = 'planned';
-    memoInput.value = '';
+  const showTool = id => {
+    toolButtons.forEach(button => {
+      const controlledId = button.getAttribute('aria-controls');
+      if (controlledId === 'modal-memo-details' || controlledId === 'modal-subtask-details') return;
+      const active = controlledId === id;
+      button.setAttribute('aria-expanded', String(active));
+      document.getElementById(controlledId).hidden = !active;
+    });
+  };
+  toolButtons.forEach(button => button.addEventListener('click', () => {
+    const id = button.getAttribute('aria-controls');
+    const active = button.getAttribute('aria-expanded') !== 'true';
+    if (id === 'modal-memo-details' || id === 'modal-subtask-details') {
+      button.setAttribute('aria-expanded', String(active));
+      document.getElementById(id).hidden = !active;
+      if (active) {
+        if (id === 'modal-memo-details') resizeMemo();
+        document.getElementById(id === 'modal-memo-details' ? 'modal-todo-memo' : 'modal-subtask-input').focus();
+      }
+    } else {
+      showTool(active ? id : null);
+    }
+  }));
+
+  const updateDateSummary = () => {
+    dateSummary.textContent = dateInput.value && endDateInput.value && endDateInput.value !== dateInput.value
+      ? `${formatCalendarDate(dateInput.value)} ~ ${formatCalendarDate(endDateInput.value)}`
+      : dateInput.value ? formatCalendarDate(dateInput.value) : '';
+    dateSummary.hidden = !dateInput.value;
+  };
+  const renderPicker = focusDate => {
+    const year = pickerMonth.getFullYear();
+    const month = pickerMonth.getMonth();
+    calendarMonth.textContent = `${month + 1}월 ${year}`;
+    calendarGrid.replaceChildren();
+    const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+    for (let i = 0; i < firstWeekday; i++) {
+      calendarGrid.appendChild(document.createElement('span'));
+    }
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    for (let day = 1; day <= lastDay; day++) {
+      const value = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = String(day);
+      button.setAttribute('aria-label', `${year}년 ${formatCalendarDate(value)}`);
+      button.setAttribute('aria-pressed', String(value === dateInput.value || value === endDateInput.value));
+      button.classList.toggle('is-today', value === getLocalDateStr(0));
+      button.classList.toggle('in-range', Boolean(endDateInput.value && value > dateInput.value && value < endDateInput.value));
+      button.addEventListener('click', () => {
+        if (dateMode === 'range' && selectingRangeEnd && dateInput.value) {
+          [dateInput.value, endDateInput.value] = [dateInput.value, value].sort();
+          selectingRangeEnd = false;
+        } else {
+          dateInput.value = value;
+          endDateInput.value = '';
+          selectingRangeEnd = dateMode === 'range';
+        }
+        updateDateSummary();
+        renderPicker(value);
+      });
+      calendarGrid.appendChild(button);
+      if (value === focusDate) button.focus({ preventScroll: true });
+    }
+  };
+  const setDateMode = mode => {
+    dateMode = mode;
+    selectingRangeEnd = mode === 'range' && Boolean(dateInput.value) && !endDateInput.value;
+    if (mode === 'single') endDateInput.value = '';
+    modeButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.dateMode === mode)));
+    updateDateSummary();
+    renderPicker();
+  };
+  const updatePriority = () => {
+    const label = ['낮음', '보통', '긴급', '높음'][Number(prioritySelect.value)];
+    document.getElementById('modal-priority-value').textContent = label;
+    prioritySelect.setAttribute('aria-valuetext', label);
+  };
+  const resizeMemo = () => {
+    memoInput.style.height = 'auto';
+    memoInput.style.height = `${memoInput.scrollHeight}px`;
+  };
+  const updateTimeSummary = () => {
+    timeSummary.textContent = timeInput.value;
+    timeSummary.hidden = !timeInput.value;
+  };
+  memoInput.addEventListener('input', resizeMemo);
+  timeInput.addEventListener('input', updateTimeSummary);
+  timeInput.addEventListener('change', updateTimeSummary);
+  const openModal = (todo = null) => {
+    if (!modal.classList.contains('hidden')) return;
+    editingTodo = todo;
+    returnFocus = document.activeElement;
+    document.getElementById('modal-todo-heading').textContent = todo ? '일정 수정' : '새 일정 추가';
+    btnConfirm.title = todo ? '일정 수정 저장' : '일정 등록';
+    btnConfirm.setAttribute('aria-label', btnConfirm.title);
+    titleInput.value = todo ? todo.title : '';
+    btnConfirm.hidden = !titleInput.value.trim();
+    dateInput.value = todo ? todo.due_date : state.viewMode === 'calendar' ? state.selectedCalendarDate : '';
+    endDateInput.value = todo ? todo.end_date || '' :
+      state.viewMode === 'calendar' && state.calendarRangeEnd !== state.selectedCalendarDate
+        ? state.calendarRangeEnd || '' : '';
+    timeInput.value = todo && todo.due_time ? todo.due_time.slice(0, 5) : '';
+    updateTimeSummary();
+    subtasks.set(todo ? todo.subtasks : []);
+    const categoryId = todo ? todo.category_id : state.selectedCategoryId;
+    catSelect.value = categoryId != null ? String(categoryId) : '';
+    prioritySelect.value = String(todo ? todo.priority || 0 : 0);
+    updatePriority();
+    memoInput.value = todo ? todo.memo || '' : '';
+    memoInput.style.height = '';
+    toolButtons.forEach(button => {
+      button.setAttribute('aria-expanded', 'false');
+      document.getElementById(button.getAttribute('aria-controls')).hidden = true;
+    });
+    const [year, month] = (dateInput.value || getLocalDateStr(0)).split('-').map(Number);
+    pickerMonth = new Date(year, month - 1, 1);
+    setDateMode(endDateInput.value ? 'range' : 'single');
     modal.classList.remove('hidden');
-    setTimeout(() => titleInput.focus(), 50);
+    if (todo && todo.memo) {
+      const button = modal.querySelector('[aria-controls="modal-memo-details"]');
+      button.setAttribute('aria-expanded', 'true');
+      document.getElementById('modal-memo-details').hidden = false;
+      resizeMemo();
+    }
+    if (todo && todo.subtasks && todo.subtasks.length) {
+      modal.querySelector('[aria-controls="modal-subtask-details"]').setAttribute('aria-expanded', 'true');
+      document.getElementById('modal-subtask-details').hidden = false;
+    }
+    titleInput.focus();
   };
+  openTodoEditor = todo => openModal(todo);
 
-  const closeModal = () => {
+  const closeModal = (force = false) => {
+    if (btnConfirm.disabled && force !== true) return;
     modal.classList.add('hidden');
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
   };
 
-  if (btnOpen) btnOpen.addEventListener('click', openModal);
+  if (btnOpen) btnOpen.addEventListener('click', () => openModal());
   if (btnClose) btnClose.addEventListener('click', closeModal);
-  if (btnCancel) btnCancel.addEventListener('click', closeModal);
+  modal.addEventListener('click', event => {
+    if (event.target === modal) closeModal();
+  });
+  titleInput.addEventListener('input', () => {
+    btnConfirm.hidden = !titleInput.value.trim();
+  });
 
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n' &&
+        document.getElementById('tab-reminders').style.display !== 'none') {
       e.preventDefault();
       openModal();
     } else if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
+      e.preventDefault();
       closeModal();
+    } else if (e.key === 'Tab' && !modal.classList.contains('hidden')) {
+      const focusable = Array.from(modal.querySelectorAll('button:not([disabled]):not([hidden]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])'))
+        .filter(element => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   });
 
@@ -846,16 +1088,46 @@ function setupNewTodoModal() {
     chip.addEventListener('click', () => {
       const offset = parseInt(chip.dataset.modalDate, 10) || 0;
       dateInput.value = getLocalDateStr(offset);
+      endDateInput.value = '';
+      selectingRangeEnd = dateMode === 'range';
+      const [year, month] = dateInput.value.split('-').map(Number);
+      pickerMonth = new Date(year, month - 1, 1);
+      updateDateSummary();
+      renderPicker();
     });
   });
+
+  modeButtons.forEach(button => button.addEventListener('click', () => setDateMode(button.dataset.dateMode)));
+  document.getElementById('modal-calendar-prev').addEventListener('click', () => {
+    pickerMonth = new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() - 1, 1);
+    renderPicker();
+  });
+  document.getElementById('modal-calendar-next').addEventListener('click', () => {
+    pickerMonth = new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 1);
+    renderPicker();
+  });
+  document.getElementById('modal-date-clear').addEventListener('click', () => {
+    dateInput.value = '';
+    endDateInput.value = '';
+    selectingRangeEnd = false;
+    updateDateSummary();
+    renderPicker();
+  });
+  document.getElementById('modal-date-done').addEventListener('click', () => {
+    showTool(null);
+    modal.querySelector('[aria-controls="modal-date-details"]').focus();
+  });
+  prioritySelect.addEventListener('input', updatePriority);
 
   document.querySelectorAll('[data-modal-time]').forEach(chip => {
     chip.addEventListener('click', () => {
       timeInput.value = chip.dataset.modalTime || '';
+      updateTimeSummary();
     });
   });
 
   const submitModal = async () => {
+    if (btnConfirm.disabled) return;
     const title = titleInput.value.trim();
     if (!title) {
       titleInput.focus();
@@ -864,31 +1136,59 @@ function setupNewTodoModal() {
 
     const todayStr = getLocalDateStr(0);
     const dueDate = dateInput.value || todayStr;
+    const endDate = endDateInput.value || null;
+    if (endDate && endDate < dueDate) {
+      showToast('종료일은 시작일보다 빠를 수 없습니다.');
+      showTool('modal-date-details');
+      document.getElementById('modal-date-done').focus();
+      return;
+    }
     const draft = {
       title,
-      memo: memoInput.value.trim(),
+      memo: editingTodo ? memoInput.value : memoInput.value.trim(),
       category_id: catSelect.value ? parseInt(catSelect.value, 10) : null,
       due_date: dueDate,
-      due_time: timeInput.value || null,
-      status: statusSelect.value || 'planned',
-      condition_note: '',
+      end_date: endDate,
+      due_time: editingTodo && timeInput.value && timeInput.value === (editingTodo.due_time || '').slice(0, 5)
+        ? editingTodo.due_time : timeInput.value || null,
+      subtasks: subtasks.get(),
+      priority: Number(prioritySelect.value),
+      status: editingTodo ? editingTodo.status : 'planned',
+      condition_note: editingTodo ? editingTodo.condition_note || '' : '',
     };
 
+    btnConfirm.disabled = true;
     try {
-      await api.createTodo(draft);
-      closeModal();
+      if (draft.subtasks.length || (editingTodo && editingTodo.subtasks && editingTodo.subtasks.length)) await api.requireTodoDetailsSupport();
+      if (draft.priority || (editingTodo && editingTodo.priority)) await api.requirePrioritySupport();
+      if (editingTodo) {
+        await api.updateTodo(editingTodo.id, draft);
+      } else {
+        await api.createTodo(draft);
+      }
+      closeModal(true);
 
-      if (state.viewMode === 'list' && state.selectedCategoryId == null && state.currentFilter === 'today' && dueDate > todayStr) {
+      if (!editingTodo && state.viewMode === 'list' && state.selectedCategoryId == null && state.currentFilter === 'today' && dueDate > todayStr) {
         selectSmartFilter('scheduled');
-      } else if (state.viewMode === 'calendar') {
+      } else if (!editingTodo && state.viewMode === 'calendar') {
         state.selectedCalendarDate = dueDate;
+        state.calendarRangeEnd = endDate || dueDate;
+        const [year, month] = dueDate.split('-').map(Number);
+        state.calendarYear = year;
+        state.calendarMonth = month;
       }
 
       await refreshAll(false);
-      showToast(`"${title}" 일정이 등록되었습니다 (${dueDate})`);
+      if (editingTodo && state.selectedTodo && state.selectedTodo.id === editingTodo.id) {
+        state.selectedTodo = { ...editingTodo, ...draft };
+        renderInspectorDetails(state.selectedTodo);
+      }
+      showToast(editingTodo ? `"${title}" 변경사항이 저장되었습니다` : `"${title}" 일정이 등록되었습니다 (${dueDate})`);
     } catch (err) {
-      console.error('Failed to create todo from modal:', err);
-      showToast(`일정 등록 실패: ${err.message}`);
+      console.error('Failed to save todo from modal:', err);
+      showToast(`일정 ${editingTodo ? '수정' : '등록'} 실패: ${err.message}`);
+    } finally {
+      btnConfirm.disabled = false;
     }
   };
 
@@ -904,6 +1204,104 @@ function setupNewTodoModal() {
 }
 
 // ── 체크리스트 렌더링 & 달성률 프로그레스 바 ──
+async function deleteTodoFromList(todo) {
+  try {
+    await api.deleteTodo(todo.id);
+    if (state.selectedTodo && state.selectedTodo.id === todo.id) {
+      document.getElementById('inspector-panel').classList.add('hidden');
+      state.selectedTodo = null;
+    }
+    await refreshAll(false);
+    showToast(`"${todo.title}" 일정이 삭제되었습니다`);
+  } catch (err) {
+    console.error('Failed to delete todo:', err);
+    showToast(`일정 삭제 실패: ${err.message}`);
+  }
+}
+
+function setupTodoSwipe(wrapper, row, todo) {
+  const reveal = 76;
+  let startX = 0;
+  let startY = 0;
+  let pointerId = null;
+  let offset = 0;
+  let origin = 0;
+  let dragging = false;
+  let suppressClick = false;
+  let busy = false;
+  const setOffset = value => {
+    offset = value;
+    row.style.transform = value ? `translateX(${value}px)` : '';
+    wrapper.classList.toggle('swipe-left', value < 0);
+    wrapper.classList.toggle('swipe-right', value > 0);
+  };
+  const act = async direction => {
+    if (busy) return;
+    busy = true;
+    setOffset(0);
+    try {
+      if (direction === 'delete') await deleteTodoFromList(todo);
+      else openTodoEditor(todo);
+    } finally {
+      busy = false;
+    }
+  };
+  wrapper.querySelector('.swipe-delete').addEventListener('click', () => act('delete'));
+  wrapper.querySelector('.swipe-edit').addEventListener('click', () => act('edit'));
+  row.addEventListener('click', event => {
+    if (suppressClick || offset) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressClick = false;
+      if (offset) setOffset(0);
+    }
+  }, true);
+  row.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.target.closest('button, input, .apple-checkbox, .status-pill')) return;
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    origin = offset;
+    dragging = false;
+    suppressClick = false;
+  });
+  row.addEventListener('pointermove', event => {
+    if (pointerId !== event.pointerId) return;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (!dragging) {
+      if (Math.abs(dy) > 8 && Math.abs(dy) >= Math.abs(dx)) {
+        pointerId = null;
+        return;
+      }
+      if (Math.abs(dx) < 8 || Math.abs(dx) <= Math.abs(dy)) return;
+      dragging = true;
+      row.setPointerCapture(event.pointerId);
+      wrapper.classList.add('swiping');
+    }
+    event.preventDefault();
+    const width = wrapper.clientWidth;
+    setOffset(Math.max(-width, Math.min(width, origin + dx)));
+  });
+  const finish = (event, cancelled) => {
+    if (pointerId !== event.pointerId) return;
+    pointerId = null;
+    if (!dragging) return;
+    dragging = false;
+    wrapper.classList.remove('swiping');
+    suppressClick = true;
+    const distance = offset;
+    if (cancelled) setOffset(0);
+    else if (Math.abs(distance) >= Math.max(130, wrapper.clientWidth * 0.55)) {
+      act(distance < 0 ? 'delete' : 'edit');
+    } else {
+      setOffset(Math.abs(distance) >= 48 ? Math.sign(distance) * reveal : 0);
+    }
+  };
+  row.addEventListener('pointerup', event => finish(event, false));
+  row.addEventListener('pointercancel', event => finish(event, true));
+}
+
 function renderTodoList() {
   const container = document.getElementById('todo-checklist');
   const subtitle = document.getElementById('view-count-subtitle');
@@ -922,16 +1320,9 @@ function renderTodoList() {
     progText.textContent = total > 0 ? `${pct}% 완료 (${doneCount}/${total})` : '일정 없음';
   }
 
+  container.classList.toggle('empty', total === 0);
   if (total === 0) {
-    container.innerHTML = `
-      <div style="text-align: center; padding: 52px 20px; color: var(--apple-muted);">
-        <div style="font-size: 38px; margin-bottom: 8px; color: var(--apple-primary);">
-          <i class="ph-bold ph-check-circle"></i>
-        </div>
-        <div style="font-size: 17px; font-weight: 400; color: var(--apple-foreground);">등록된 일정이 없습니다</div>
-        <div style="font-size: 14px; margin-top: 4px;">위 입력란에서 Enter로 즉시 추가하거나 <kbd style="background:#f5f5f7;border:1px solid #d1d1d6;border-radius:4px;padding:1px 5px;font-size:12px;">Ctrl+N</kbd>을 눌러 상세 일정을 등록하세요.</div>
-      </div>
-    `;
+    container.innerHTML = '<div class="empty-message">등록된 일정이 없습니다</div>';
     return;
   }
 
@@ -939,11 +1330,17 @@ function renderTodoList() {
   const todayStr = getLocalDateStr(0);
 
   state.todos.forEach(todo => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'todo-swipe-wrapper';
+    wrapper.innerHTML = `
+      <button type="button" class="swipe-action swipe-edit" aria-label="일정 수정">수정</button>
+      <button type="button" class="swipe-action swipe-delete" aria-label="일정 삭제">제거</button>
+    `;
     const row = document.createElement('div');
     row.className = `todo-row ${state.selectedTodo && state.selectedTodo.id === todo.id ? 'selected' : ''}`;
 
     const isFinished = todo.status === 'done' || todo.status === 'conditional_done';
-    const isOverdue = !isFinished && todo.due_date < todayStr;
+    const isOverdue = !isFinished && (todo.end_date || todo.due_date) < todayStr;
 
     let catHtml = '';
     if (todo.category_id != null) {
@@ -1003,23 +1400,18 @@ function renderTodoList() {
     const checkEl = row.querySelector('.apple-checkbox');
     checkEl.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const next = todo.status === 'done' ? 'in_progress' : 'done';
+      const next = nextTodoStatus(todo.status);
       await api.toggleStatus(todo.id, next);
       await refreshAll(false);
-      showToast(next === 'done' ? `"${todo.title}" 완료 처리됨` : `"${todo.title}" 진행중으로 변경됨`);
+      const label = { planned: '예정', in_progress: '진행중', done: '완료' }[next];
+      showToast(`"${todo.title}" ${label}으로 변경됨`);
     });
 
     // 상태 배지 클릭 (순환)
     const pillEl = row.querySelector('.status-pill');
     pillEl.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const cycle = {
-        planned: 'in_progress',
-        in_progress: 'conditional_done',
-        conditional_done: 'done',
-        done: 'planned',
-      };
-      const next = cycle[todo.status] || 'planned';
+      const next = nextTodoStatus(todo.status);
       await api.toggleStatus(todo.id, next);
       await refreshAll(false);
     });
@@ -1034,6 +1426,7 @@ function renderTodoList() {
         memo: todo.memo || '',
         category_id: todo.category_id,
         due_date: nextDate,
+        end_date: todo.end_date ? addDaysToDateStr(todo.end_date, 1) : null,
         due_time: todo.due_time,
         status: todo.status,
         condition_note: todo.condition_note || '',
@@ -1046,13 +1439,7 @@ function renderTodoList() {
     const btnDel = row.querySelector('.row-action-btn.delete');
     btnDel.addEventListener('click', async (e) => {
       e.stopPropagation();
-      await api.deleteTodo(todo.id);
-      if (state.selectedTodo && state.selectedTodo.id === todo.id) {
-        document.getElementById('inspector-panel').classList.add('hidden');
-        state.selectedTodo = null;
-      }
-      await refreshAll(false);
-      showToast(`"${todo.title}" 일정이 삭제되었습니다`);
+      await deleteTodoFromList(todo);
     });
 
     // 행 클릭 -> 인스펙터 열기
@@ -1060,7 +1447,9 @@ function renderTodoList() {
       openInspector(todo);
     });
 
-    container.appendChild(row);
+    wrapper.appendChild(row);
+    setupTodoSwipe(wrapper, row, todo);
+    container.appendChild(wrapper);
   });
 }
 
@@ -1078,100 +1467,66 @@ function getStatusLabel(s) {
 function setupInspector() {
   const panel = document.getElementById('inspector-panel');
   const btnClose = document.getElementById('btn-close-inspector');
-  const btnSave = document.getElementById('btn-save-inspect');
-  const btnDelete = document.getElementById('btn-delete-inspect');
+  const btnEdit = document.getElementById('btn-edit-inspect');
 
-  const titleInput = document.getElementById('inspect-title');
-  const memoInput = document.getElementById('inspect-memo');
-  const dateInput = document.getElementById('inspect-date');
-  const timeInput = document.getElementById('inspect-time');
-  const catSelect = document.getElementById('inspect-category');
-  const statusSelect = document.getElementById('inspect-status');
-  const conditionBox = document.getElementById('inspect-condition-box');
-  const conditionInput = document.getElementById('inspect-condition');
-
-  statusSelect.addEventListener('change', () => {
-    conditionBox.style.display = statusSelect.value === 'conditional_done' ? 'flex' : 'none';
+  btnEdit.addEventListener('click', () => {
+    if (!state.selectedTodo) return;
+    openTodoEditor(state.selectedTodo);
   });
 
-  document.getElementById('chip-date-today').addEventListener('click', () => {
-    dateInput.value = getLocalDateStr(0);
-  });
-  document.getElementById('chip-date-tomorrow').addEventListener('click', () => {
-    dateInput.value = getLocalDateStr(1);
-  });
-  document.getElementById('chip-date-nextweek').addEventListener('click', () => {
-    dateInput.value = getLocalDateStr(7);
-  });
-
-  document.getElementById('chip-time-09').addEventListener('click', () => { timeInput.value = '09:00'; });
-  document.getElementById('chip-time-13').addEventListener('click', () => { timeInput.value = '13:00'; });
-  document.getElementById('chip-time-18').addEventListener('click', () => { timeInput.value = '18:00'; });
-  document.getElementById('chip-time-clear').addEventListener('click', () => { timeInput.value = ''; });
-
-  btnClose.addEventListener('click', () => {
+  const closeInspector = () => {
     panel.classList.add('hidden');
     state.selectedTodo = null;
     document.querySelectorAll('.todo-row').forEach(r => r.classList.remove('selected'));
+    if (inspectorReturnFocus && inspectorReturnFocus.isConnected) inspectorReturnFocus.focus();
+    inspectorReturnFocus = null;
+  };
+  btnClose.addEventListener('click', closeInspector);
+}
+
+let inspectorReturnFocus = null;
+
+function renderInspectorDetails(todo) {
+  const setText = (id, value) => { document.getElementById(id).textContent = value; };
+  const category = state.categories.find(item => item.id === todo.category_id);
+  const labels = { planned: '진행예정', in_progress: '진행중', conditional_done: '조건부완료', done: '완료' };
+  setText('detail-title', todo.title);
+  setText('detail-date', todo.end_date && todo.end_date !== todo.due_date
+    ? `${todo.due_date} ~ ${todo.end_date}` : todo.due_date);
+  setText('detail-time', todo.due_time ? todo.due_time.slice(0, 5) : '없음');
+  setText('detail-category', category ? category.name : '미분류');
+  setText('detail-status', labels[todo.status] || todo.status);
+  setText('detail-priority', todo.priority ? '!'.repeat(todo.priority) : '낮음');
+  setText('detail-memo', todo.memo || '메모가 없습니다.');
+  document.getElementById('detail-condition-row').hidden = !todo.condition_note;
+  setText('detail-condition', todo.condition_note || '');
+  const list = document.getElementById('detail-subtasks');
+  const subtasks = todo.subtasks || [];
+  list.replaceChildren();
+  subtasks.forEach(item => {
+    const entry = document.createElement('li');
+    entry.textContent = `${item.done ? '☑' : '☐'} ${item.title}`;
+    list.appendChild(entry);
   });
+  document.getElementById('detail-no-subtasks').hidden = subtasks.length > 0;
+}
 
-  btnSave.addEventListener('click', async () => {
-    if (!state.selectedTodo) return;
-    const title = titleInput.value.trim();
-    if (!title) return;
-
-    const draft = {
-      title,
-      memo: memoInput.value,
-      category_id: catSelect.value ? parseInt(catSelect.value, 10) : null,
-      due_date: dateInput.value || getLocalDateStr(0),
-      due_time: timeInput.value || null,
-      status: statusSelect.value,
-      condition_note: conditionInput.value.trim(),
-    };
-
-    try {
-      await api.updateTodo(state.selectedTodo.id, draft);
-      panel.classList.add('hidden');
-      state.selectedTodo = null;
-      await refreshAll(false);
-      showToast(`"${title}" 변경사항이 저장되었습니다`);
-    } catch (err) {
-      console.error('Failed to update todo:', err);
-    }
-  });
-
-  btnDelete.addEventListener('click', async () => {
-    if (!state.selectedTodo) return;
-    const delTitle = state.selectedTodo.title;
-    try {
-      await api.deleteTodo(state.selectedTodo.id);
-      panel.classList.add('hidden');
-      state.selectedTodo = null;
-      await refreshAll(false);
-      showToast(`"${delTitle}" 일정이 삭제되었습니다`);
-    } catch (err) {
-      console.error('Failed to delete todo:', err);
-    }
-  });
+function updateInspectorPresentation() {
+  const panel = document.getElementById('inspector-panel');
+  if (!panel) return;
+  panel.removeAttribute('role');
+  panel.removeAttribute('aria-modal');
 }
 
 function openInspector(todo) {
-  state.selectedTodo = todo;
   const panel = document.getElementById('inspector-panel');
+  if (panel.classList.contains('hidden')) inspectorReturnFocus = document.activeElement;
+  state.selectedTodo = todo;
+  updateInspectorPresentation();
   panel.classList.remove('hidden');
-
-  document.getElementById('inspect-title').value = todo.title;
-  document.getElementById('inspect-memo').value = todo.memo || '';
-  document.getElementById('inspect-date').value = todo.due_date;
-  document.getElementById('inspect-time').value = todo.due_time ? todo.due_time.substring(0, 5) : '';
-  document.getElementById('inspect-category').value = todo.category_id != null ? todo.category_id : '';
-  document.getElementById('inspect-status').value = todo.status;
-
-  const conditionBox = document.getElementById('inspect-condition-box');
-  const conditionInput = document.getElementById('inspect-condition');
-  conditionInput.value = todo.condition_note || '';
-  conditionBox.style.display = todo.status === 'conditional_done' ? 'flex' : 'none';
+  renderInspectorDetails(todo);
+  panel.scrollTop = 0;
+  if (state.viewMode === 'list') document.getElementById('btn-close-inspector').focus({ preventScroll: true });
 
   document.querySelectorAll('.todo-row').forEach(r => {
     r.classList.toggle('selected', r.querySelector('.apple-checkbox').dataset.id == todo.id);
@@ -1221,31 +1576,106 @@ function setupCategoryModal() {
 }
 
 // ── 설정 탭 ──
-async function setupSettings() {
-  const checkHotzone = document.getElementById('setting-hotzone-enabled');
-  const fields = [
-    ['setting-hotzone-center', 'hotzone_center_percent', 50],
-    ['setting-hotzone-width', 'hotzone_width', 240],
-    ['setting-hotzone-height', 'hotzone_height', 4],
-    ['setting-hotzone-dwell', 'hotzone_dwell_ms', 150],
-  ];
-  const saveButton = document.getElementById('btn-save-hotzone');
+const settingsFields = [
+  ['setting-hotzone-center', 'hotzone_center_percent', 50],
+  ['setting-hotzone-width', 'hotzone_width', 240],
+  ['setting-hotzone-height', 'hotzone_height', 4],
+  ['setting-hotzone-dwell', 'hotzone_dwell_ms', 150],
+  ['setting-hide-delay', 'hide_delay_ms', 400],
+  ['setting-panel-width', 'panel_width', 480],
+];
 
+function renderSettings(s) {
+  const checkHotzone = document.getElementById('setting-hotzone-enabled');
+  if (s && checkHotzone) {
+    checkHotzone.checked = s.hotzone_enabled !== false;
+    settingsFields.forEach(([id, key, fallback]) => {
+      document.getElementById(id).value = s[key] == null ? fallback : s[key];
+    });
+  }
+}
+
+async function loadSettings() {
   try {
     const s = await api.getSettings();
-    if (s && checkHotzone) {
-      checkHotzone.checked = s.hotzone_enabled !== false;
-      fields.forEach(([id, key, fallback]) => {
-        document.getElementById(id).value = s[key] == null ? fallback : s[key];
-      });
-    }
+    renderSettings(s);
   } catch (err) {
     console.warn('설정 로드 실패:', err);
     showToast('핫존 설정을 불러오지 못했습니다');
   }
+}
+
+async function setupSettings() {
+  const checkHotzone = document.getElementById('setting-hotzone-enabled');
+  const saveButton = document.getElementById('btn-save-hotzone');
+  const resetButton = document.getElementById('btn-reset-settings');
+  const memoryButton = document.getElementById('btn-refresh-memory');
+  const memoryUsage = document.getElementById('settings-memory-usage');
+  const cacheButton = document.getElementById('btn-clear-http-cache');
+  await loadSettings();
+
+  if (memoryButton && memoryUsage) {
+    memoryButton.addEventListener('click', async () => {
+      memoryButton.disabled = true;
+      try {
+        if (!window.electronAPI || !window.electronAPI.getElectronMemory) {
+          throw new Error('Electron 환경에서만 측정할 수 있습니다.');
+        }
+        const kib = await window.electronAPI.getElectronMemory();
+        if (!Number.isFinite(kib) || kib < 0) throw new Error('메모리 값이 올바르지 않습니다.');
+        memoryUsage.textContent = `${(kib / 1024).toFixed(1)} MB`;
+      } catch (error) {
+        console.error('메모리 측정 실패:', error);
+        memoryUsage.textContent = '측정 실패';
+        showToast(`메모리 측정 실패: ${error.message}`);
+      } finally {
+        memoryButton.disabled = false;
+      }
+    });
+  }
+
+  if (cacheButton) cacheButton.addEventListener('click', async () => {
+    if (!window.confirm('임시 HTTP 캐시를 비울까요? 일정과 앱 설정은 유지됩니다.')) return;
+    cacheButton.disabled = true;
+    try {
+      if (!window.electronAPI || !window.electronAPI.clearHttpCache) {
+        throw new Error('Electron 환경에서만 캐시를 비울 수 있습니다.');
+      }
+      await window.electronAPI.clearHttpCache();
+      showToast('HTTP 캐시를 비웠습니다');
+    } catch (error) {
+      console.error('HTTP 캐시 삭제 실패:', error);
+      showToast(`HTTP 캐시 삭제 실패: ${error.message}`);
+    } finally {
+      cacheButton.disabled = false;
+    }
+  });
+
+  if (resetButton) resetButton.addEventListener('click', async () => {
+    if (!window.confirm('앱 설정을 기본값으로 복원할까요? 일정과 목록은 삭제되지 않습니다.')) return;
+    resetButton.disabled = true;
+    try {
+      await api.saveSettings({});
+      const saved = await api.getSettings();
+      if (saved.hotzone_enabled !== true || saved.autostart !== false ||
+          settingsFields.some(([, key, fallback]) => saved[key] !== fallback)) {
+        throw new Error('기본 설정을 확인하지 못했습니다.');
+      }
+      renderSettings(saved);
+      if (window.electronAPI && window.electronAPI.reloadHotzoneSettings) {
+        window.electronAPI.reloadHotzoneSettings();
+      }
+      showToast('설정을 기본값으로 복원했습니다');
+    } catch (error) {
+      console.error('설정 초기화 실패:', error);
+      showToast(`설정 초기화 실패: ${error.message}`);
+    } finally {
+      resetButton.disabled = false;
+    }
+  });
 
   saveButton.addEventListener('click', async () => {
-    for (const [id] of fields) {
+    for (const [id] of settingsFields) {
       const input = document.getElementById(id);
       if (!input.value || !input.reportValidity()) return;
     }
@@ -1253,11 +1683,11 @@ async function setupSettings() {
     try {
       const s = await api.getSettings();
       s.hotzone_enabled = checkHotzone.checked;
-      fields.forEach(([id, key]) => { s[key] = Number(document.getElementById(id).value); });
+      settingsFields.forEach(([id, key]) => { s[key] = Number(document.getElementById(id).value); });
       await api.saveSettings(s);
       const saved = await api.getSettings();
       if (saved.hotzone_enabled !== s.hotzone_enabled ||
-          fields.some(([, key]) => saved[key] !== s[key])) {
+          settingsFields.some(([, key]) => saved[key] !== s[key])) {
         throw new Error('핫존 설정이 저장되지 않았습니다. 엔진을 최신 버전으로 다시 시작하세요.');
       }
       if (window.electronAPI && window.electronAPI.reloadHotzoneSettings) {

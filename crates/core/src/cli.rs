@@ -3,16 +3,16 @@
 //! - `openlab start -s program` : GUI 데스크톱 프로그램 실행
 //! - `openlab start -s <명령>`  : 단일 CLI 명령 실행 (AI 에이전트 & 스크립트 연동)
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
+use std::time::Duration as StdDuration;
 
-use anyhow::{anyhow, bail, Result};
-#[cfg(windows)]
-use anyhow::Context;
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime};
 use serde_json::json;
 
 use crate::{
-    model::{Status, Todo, TodoDraft},
+    model::{Status, Subtask, Todo, TodoDraft},
     paths, DateFilter, Store, TodoQuery,
 };
 
@@ -129,7 +129,8 @@ pub fn parse_launch_action(raw_args: &[String]) -> LaunchAction {
 
 #[cfg(test)]
 mod launch_tests {
-    use super::{parse_launch_action, LaunchAction};
+    use super::{cmd_add, cmd_status, cmd_update, gui_control_request_at, parse_launch_action, LaunchAction};
+    use crate::{model::Status, Store, TodoQuery};
 
     #[test]
     fn interactive_and_one_shot_commands_remain_distinct() {
@@ -146,6 +147,84 @@ mod launch_tests {
             parse_launch_action(&args(&["start", "-s", "program"])),
             LaunchAction::RunGui
         );
+    }
+
+    #[test]
+    fn todo_details_can_be_created_edited_and_cleared() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let store = Store::open_in_memory().unwrap();
+        cmd_add(&store, &args(&[
+            "task", "--date", "2030-01-01", "--end-date", "2030-01-03",
+            "--priority", "3",
+            "--subtask", "first", "--subtask", "second",
+        ])).unwrap();
+        let todo = store.query(&TodoQuery::default()).unwrap().remove(0);
+        assert_eq!(todo.priority, 3);
+        assert_eq!(todo.subtasks.len(), 2);
+        let id = todo.id.to_string();
+        cmd_update(&store, &args(&[
+            &id, "--end-date", "2030-01-08", "--date", "2030-01-05",
+            "--subtask-done", "2", "--subtask-remove", "1",
+        ])).unwrap();
+        let updated = store.get(todo.id).unwrap().unwrap();
+        assert_eq!(updated.end_date.unwrap().to_string(), "2030-01-08");
+        assert_eq!(updated.priority, 3);
+        assert_eq!(updated.subtasks.len(), 1);
+        assert!(updated.subtasks[0].done);
+        assert!(cmd_update(&store, &args(&[&id, "--priority", "4"])).is_err());
+        assert!(cmd_update(&store, &args(&[&id, "--subtask-remove", "0"])).is_err());
+        assert_eq!(store.get(todo.id).unwrap().unwrap(), updated);
+        cmd_update(&store, &args(&[
+            &id, "--clear-end-date", "--priority", "0",
+            "--subtask-undone", "1",
+        ])).unwrap();
+        let cleared = store.get(todo.id).unwrap().unwrap();
+        assert_eq!(cleared.end_date, None);
+        assert_eq!(cleared.reminder_at, None);
+        assert_eq!(cleared.priority, 0);
+        assert!(!cleared.subtasks[0].done);
+        assert!(cmd_add(&store, &args(&["bad", "--reminder", "2030-01-01T09:30"])).is_err());
+    }
+
+    #[test]
+    fn status_next_matches_checkbox_cycle() {
+        let store = Store::open_in_memory().unwrap();
+        let draft = crate::model::TodoDraft::new("task", chrono::Local::now().date_naive());
+        let id = store.add(&draft).unwrap();
+        for expected in [Status::InProgress, Status::Done, Status::Planned] {
+            cmd_status(&store, &[id.to_string(), "next".to_string()]).unwrap();
+            assert_eq!(store.get(id).unwrap().unwrap().status, expected);
+        }
+    }
+
+    #[test]
+    fn gui_control_client_authenticates_and_reads_http_response() {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let token = "a".repeat(64);
+            let path = std::env::temp_dir().join(format!(
+                "openschedule-control-test-{}-{}.json", std::process::id(),
+                chrono::Local::now().timestamp_nanos_opt().unwrap()
+            ));
+            std::fs::write(&path, serde_json::json!({ "port": port, "token": token }).to_string()).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0; 1];
+                    socket.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                let request = std::str::from_utf8(&request).unwrap();
+                assert!(request.starts_with("GET /memory HTTP/1.1\r\n"));
+                assert!(request.contains(&format!("Authorization: Bearer {token}\r\n")));
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 24\r\nConnection: close\r\n\r\n{\"working_set_kib\":2048}").unwrap();
+            });
+            let result = gui_control_request_at(&path, "GET", "/memory").unwrap();
+            assert_eq!(result["working_set_kib"], 2048);
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
     }
 }
 
@@ -412,6 +491,7 @@ fn is_known_command(cmd: &str) -> bool {
             | "json"
             | "load"
             | "동기화"
+            | "settings"
             | "help"
             | "--help"
             | "-h"
@@ -528,7 +608,11 @@ fn handle_natural_language_add(store: &Store, input: &str) -> Result<()> {
         memo,
         category_id,
         due_date,
+        end_date: None,
         due_time,
+        reminder_at: None,
+        subtasks: Vec::new(),
+        priority: 0,
         status: Status::Planned,
         condition_note: String::new(),
     };
@@ -562,6 +646,9 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    if args[0].trim_start_matches('/') == "settings" {
+        return cmd_settings(&args[1..]);
+    }
     let store = Store::open_default()?;
     execute_with_store(&store, args)
 }
@@ -592,6 +679,7 @@ fn execute_with_store(store: &Store, args: &[String]) -> Result<()> {
         "categories" | "cats" | "cat" | "category" | "카테고리" => cmd_categories(store, rest),
         "summary" | "counts" | "요약" => cmd_summary(store, rest),
         "sync" | "json" | "load" | "동기화" => cmd_json_sync(store, rest),
+        "settings" => cmd_settings(rest),
         other => {
             bail!("알 수 없는 명령어입니다: '{other}'\n사용법을 보려면 `/help` 또는 `openlab start -s help`를 실행하세요.");
         }
@@ -617,6 +705,9 @@ pub fn print_help() {
     );
     println!("    openlab quit [--force]     현재 설치의 GUI/엔진 종료");
     println!("    openlab delete --help      버전, 프로그램, 캐시, 데이터 삭제");
+    println!("    add/edit: --end-date 날짜 --priority 0..3 --subtask 제목");
+    println!("    edit: --clear-end-date --subtask-done 번호 --subtask-undone 번호 --subtask-remove 번호");
+    println!("    settings [show|set <이름> <값>|reset --yes]  오버레이 설정 조회 및 변경");
     println!(
         "{C_CLAUDE}├──────────────────────────────────────────────────────────────────────────┤{C_RESET}"
     );
@@ -639,7 +730,7 @@ pub fn print_help() {
         "{C_CLAUDE}│{C_RESET}    {C_BLUE}/done{C_RESET} <ID> [--condition <사유>]                      완료 처리        {C_CLAUDE}│{C_RESET}"
     );
     println!(
-        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/status{C_RESET} <ID> <planned|in_progress|conditional_done|done> 상태 변경    {C_CLAUDE}│{C_RESET}"
+        "{C_CLAUDE}│{C_RESET}    {C_BLUE}/status{C_RESET} <ID> <next|planned|in_progress|done> 상태 변경    {C_CLAUDE}│{C_RESET}"
     );
     println!(
         "{C_CLAUDE}│{C_RESET}    {C_BLUE}/edit{C_RESET} <ID> [--title ..] [-d ..] [-t ..] [-c ..]      할 일 수정       {C_CLAUDE}│{C_RESET}"
@@ -753,6 +844,13 @@ fn render_todo_box(store: &Store, todos: &[Todo]) {
                 "     {C_DIM}│      ⎿ 메모: {}{C_RESET}",
                 t.memo.trim()
             );
+        }
+        if t.end_date.is_some() || t.priority > 0 {
+            let end = t.end_date.map(|d| d.to_string()).unwrap_or_else(|| "-".into());
+            println!("     {C_DIM}│      ⎿ 종료: {end} · 긴급도: {}{C_RESET}", "!".repeat(t.priority as usize));
+        }
+        for (index, subtask) in t.subtasks.iter().enumerate() {
+            println!("     {C_DIM}│      ⎿ {}. [{}] {}{C_RESET}", index + 1, if subtask.done { "x" } else { " " }, subtask.title);
         }
     }
     println!(
@@ -906,7 +1004,133 @@ fn resolve_category(store: &Store, input: &str, create_if_missing: bool) -> Resu
             return Ok(Some(id));
         }
     }
-    store.find_category(trimmed, create_if_missing)
+    let found = store.find_category(trimmed, create_if_missing)?;
+    if found.is_none() {
+        bail!("카테고리를 찾을 수 없습니다: '{trimmed}'");
+    }
+    Ok(found)
+}
+
+fn parse_priority(value: &str) -> Result<u8> {
+    let priority: u8 = value.parse().context("긴급도는 0부터 3까지 입력해주세요.")?;
+    if priority > 3 {
+        bail!("긴급도는 0부터 3까지 입력해주세요.");
+    }
+    Ok(priority)
+}
+
+fn next_option<'a>(args: &'a [String], index: &mut usize) -> Result<&'a str> {
+    let name = &args[*index];
+    *index += 1;
+    args.get(*index).map(String::as_str)
+        .ok_or_else(|| anyhow!("{name} 옵션에 값이 필요합니다."))
+}
+
+fn cmd_settings(args: &[String]) -> Result<()> {
+    let action = args.first().map(String::as_str).unwrap_or("show");
+    if action == "memory" && args.len() == 1 {
+        let response = gui_control_request("GET", "/memory")?;
+        let kib = response["working_set_kib"].as_u64().context("GUI 메모리 응답이 올바르지 않습니다.")?;
+        println!("Electron 작업 집합: {:.1} MB ({kib} KiB)", kib as f64 / 1024.0);
+        return Ok(());
+    }
+    if action == "clear-http-cache" {
+        if args.len() != 2 || args[1] != "--yes" {
+            bail!("HTTP 캐시를 비우려면 settings clear-http-cache --yes를 입력해주세요.");
+        }
+        let response = gui_control_request("POST", "/http-cache/clear")?;
+        if response["ok"] != true {
+            bail!("GUI의 HTTP 캐시 정리 응답이 올바르지 않습니다.");
+        }
+        println!("GUI HTTP 캐시를 비웠습니다.");
+        return Ok(());
+    }
+    if action == "reset" {
+        if args.len() != 2 || args[1] != "--yes" {
+            bail!("설정을 초기화하려면 settings reset --yes를 입력해주세요.");
+        }
+        crate::settings::Settings::default().save()?;
+        println!("설정을 기본값으로 복원했습니다.");
+        return Ok(());
+    }
+    let path = paths::settings_path();
+    let mut settings: crate::settings::Settings = match std::fs::read_to_string(path) {
+        Ok(raw) => serde_json::from_str(&raw).context("설정 파일을 읽을 수 없습니다.")?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Default::default(),
+        Err(error) => return Err(error).context("설정 파일을 읽을 수 없습니다."),
+    };
+    match action {
+        "show" if args.len() == 1 || args.is_empty() || (args.len() == 2 && args[1] == "--json") => {
+            println!("{}", serde_json::to_string_pretty(&settings)?);
+        }
+        "set" if args.len() == 3 => {
+            let key = args[1].as_str();
+            let value = &args[2];
+            match key {
+                "hotzone_enabled" => settings.hotzone_enabled = value.parse().context("true 또는 false를 입력해주세요.")?,
+                "hotzone_width" | "hotzone_height" | "hotzone_center_percent" | "panel_width" => {
+                    let number: f32 = value.parse().context("유효한 숫자를 입력해주세요.")?;
+                    let (min, max) = match key {
+                        "hotzone_width" => (20.0, 4000.0),
+                        "hotzone_height" => (1.0, 200.0),
+                        "hotzone_center_percent" => (0.0, 100.0),
+                        _ => (320.0, 1000.0),
+                    };
+                    if !number.is_finite() || !(min..=max).contains(&number) {
+                        bail!("{key} 값은 {min}부터 {max}까지여야 합니다.");
+                    }
+                    match key {
+                        "hotzone_width" => settings.hotzone_width = number,
+                        "hotzone_height" => settings.hotzone_height = number,
+                        "hotzone_center_percent" => settings.hotzone_center_percent = number,
+                        _ => settings.panel_width = number,
+                    }
+                }
+                "hotzone_dwell_ms" | "hide_delay_ms" => {
+                    let number: u64 = value.parse().context("0 이상의 정수를 입력해주세요.")?;
+                    let max = if key == "hotzone_dwell_ms" { 5000 } else { 10000 };
+                    if number > max { bail!("{key} 값은 0부터 {max}까지여야 합니다."); }
+                    if key == "hotzone_dwell_ms" { settings.hotzone_dwell_ms = number; }
+                    else { settings.hide_delay_ms = number; }
+                }
+                _ => bail!("알 수 없는 설정입니다: {key}"),
+            }
+            settings.save()?;
+            println!("{}", serde_json::to_string_pretty(&settings)?);
+        }
+        _ => bail!("사용법: settings [show [--json] | set <이름> <값> | reset --yes | memory | clear-http-cache --yes]"),
+    }
+    Ok(())
+}
+
+fn gui_control_request(method: &str, endpoint: &str) -> Result<serde_json::Value> {
+    let path = paths::data_dir().join("gui-control.json");
+    gui_control_request_at(&path, method, endpoint)
+}
+
+fn gui_control_request_at(path: &std::path::Path, method: &str, endpoint: &str) -> Result<serde_json::Value> {
+    let raw = std::fs::read_to_string(path).context("GUI 제어 정보를 찾을 수 없습니다. 프로그램을 실행해주세요.")?;
+    let info: serde_json::Value = serde_json::from_str(&raw).context("GUI 제어 정보를 읽을 수 없습니다.")?;
+    let port = info["port"].as_u64().and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0).context("GUI 제어 포트가 올바르지 않습니다.")?;
+    let token = info["token"].as_str().filter(|token|
+        token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .context("GUI 제어 인증 정보가 올바르지 않습니다.")?;
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let mut stream = TcpStream::connect_timeout(&address.into(), StdDuration::from_secs(3))
+        .context("실행 중인 GUI에 연결할 수 없습니다.")?;
+    stream.set_read_timeout(Some(StdDuration::from_secs(10)))?;
+    stream.set_write_timeout(Some(StdDuration::from_secs(3)))?;
+    write!(stream, "{method} {endpoint} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")?;
+    let mut bytes = Vec::new();
+    stream.take(64 * 1024).read_to_end(&mut bytes).context("GUI 응답을 읽을 수 없습니다.")?;
+    let response = std::str::from_utf8(&bytes).context("GUI 응답 형식이 올바르지 않습니다.")?;
+    let (headers, body) = response.split_once("\r\n\r\n").context("GUI HTTP 응답이 올바르지 않습니다.")?;
+    let data: serde_json::Value = serde_json::from_str(body).context("GUI 응답을 해석할 수 없습니다.")?;
+    if !headers.lines().next().is_some_and(|line| line.starts_with("HTTP/1.1 200 ")) {
+        bail!("GUI 명령 실패: {}", data["error"].as_str().unwrap_or("알 수 없는 오류"));
+    }
+    Ok(data)
 }
 
 fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
@@ -917,6 +1141,9 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
     let mut memo = String::new();
     let mut status = Status::Planned;
     let mut condition_note = String::new();
+    let mut end_date = None;
+    let mut priority = 0;
+    let mut subtasks = Vec::new();
     let mut json_output = false;
 
     let mut i = 0;
@@ -972,6 +1199,11 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
                 }
                 condition_note = args[i].clone();
             }
+            "--end-date" => end_date = Some(parse_flexible_date(next_option(args, &mut i)?)?),
+            "--priority" => priority = parse_priority(next_option(args, &mut i)?)?,
+            "--subtask" => subtasks.push(Subtask {
+                title: next_option(args, &mut i)?.to_string(), done: false,
+            }),
             "--json" => {
                 json_output = true;
             }
@@ -1007,7 +1239,11 @@ fn cmd_add(store: &Store, args: &[String]) -> Result<()> {
         memo,
         category_id,
         due_date,
+        end_date,
         due_time,
+        reminder_at: None,
+        subtasks,
+        priority,
         status,
         condition_note,
     };
@@ -1317,14 +1553,19 @@ fn cmd_done(store: &Store, args: &[String]) -> Result<()> {
 
 fn cmd_status(store: &Store, args: &[String]) -> Result<()> {
     if args.len() < 2 {
-        bail!("사용법: /status <ID> <STATUS> [--condition <메모>]\n상태값: planned(진행예정), in_progress(진행중), conditional_done(조건부완료), done(완료)");
+        bail!("사용법: /status <ID> <next|planned|in_progress|done>");
     }
     let id: i64 = args[0]
         .trim_start_matches('#')
         .parse()
         .map_err(|_| anyhow!("올바른 일정 ID가 아닙니다: '{}'", args[0]))?;
-    let next_status = Status::parse_loose(&args[1])
-        .ok_or_else(|| anyhow!("알 수 없는 상태 값입니다: '{}'", args[1]))?;
+    let next_status = if args[1] == "next" {
+        store.get(id)?.ok_or_else(|| anyhow!("ID #{id} 일정을 찾을 수 없습니다."))?.status.next()
+    } else {
+        Status::parse_loose(&args[1])
+            .ok_or_else(|| anyhow!("알 수 없는 상태 값입니다: '{}'", args[1]))?
+            .current()
+    };
 
     let mut condition_note: Option<String> = None;
     let mut json_output = false;
@@ -1396,6 +1637,7 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
         .ok_or_else(|| anyhow!("ID #{id} 일정을 찾을 수 없습니다."))?;
     let mut draft = existing.to_draft();
     let mut json_output = false;
+    let mut end_date_override = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -1412,7 +1654,12 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
                 if i >= args.len() {
                     bail!("--date 옵션에 값이 필요합니다.");
                 }
-                draft.due_date = parse_flexible_date(&args[i])?;
+                let new_date = parse_flexible_date(&args[i])?;
+                if let Some(end) = draft.end_date {
+                    draft.end_date = Some(end.checked_add_signed(new_date - draft.due_date)
+                        .context("일정 종료일 범위를 벗어났습니다.")?);
+                }
+                draft.due_date = new_date;
             }
             "--time" | "-t" => {
                 i += 1;
@@ -1450,12 +1697,34 @@ fn cmd_update(store: &Store, args: &[String]) -> Result<()> {
                 }
                 draft.condition_note = args[i].clone();
             }
+            "--end-date" => end_date_override = Some(Some(parse_flexible_date(next_option(args, &mut i)?)?)),
+            "--clear-end-date" => end_date_override = Some(None),
+            "--priority" => draft.priority = parse_priority(next_option(args, &mut i)?)?,
+            "--subtask" => draft.subtasks.push(Subtask {
+                title: next_option(args, &mut i)?.to_string(), done: false,
+            }),
+            "--subtask-done" | "--subtask-undone" | "--subtask-remove" => {
+                let operation = args[i].clone();
+                let index: usize = next_option(args, &mut i)?.parse()
+                    .context("세부 할 일 번호는 1부터 시작합니다.")?;
+                if index == 0 || index > draft.subtasks.len() {
+                    bail!("세부 할 일 번호가 범위를 벗어났습니다: {index}");
+                }
+                if operation == "--subtask-remove" {
+                    draft.subtasks.remove(index - 1);
+                } else {
+                    draft.subtasks[index - 1].done = operation == "--subtask-done";
+                }
+            }
             "--json" => json_output = true,
             other => bail!("알 수 없는 옵션입니다: '{other}'"),
         }
         i += 1;
     }
 
+    if let Some(end_date) = end_date_override {
+        draft.end_date = end_date;
+    }
     store.update(id, &draft)?;
     let updated = store.get(id)?.unwrap();
 

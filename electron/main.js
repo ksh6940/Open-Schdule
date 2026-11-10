@@ -13,7 +13,8 @@ if (typeof electronModule === 'string') {
   process.exit(0);
 }
 
-const { app, BrowserWindow, screen, ipcMain, Tray, Menu, nativeImage } = electronModule;
+const { app, BrowserWindow, screen, ipcMain, Tray, Menu, nativeImage, session } = electronModule;
+const { startGuiControl } = require('./gui-control');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
@@ -26,6 +27,7 @@ let tray = null;
 let rustProcess = null;
 let isQuitting = false;
 let refreshAgentWatchers = null;
+let stopGuiControl = null;
 
 let hotzoneEnteredAt = null;
 let leaveHotzoneAt = null;
@@ -34,7 +36,7 @@ let overlayHideTimer = null;
 let overlayHideCanCancel = false;
 let hotzoneNeedsExit = false;
 let hotzoneSettings = {
-  enabled: true, width: 240, height: 4, centerPercent: 50, dwellMs: 150, hideDelayMs: 400,
+  enabled: true, width: 240, height: 4, centerPercent: 50, dwellMs: 150, hideDelayMs: 400, panelWidth: 480,
 };
 
 function reloadHotzoneSettings() {
@@ -60,6 +62,7 @@ function reloadHotzoneSettings() {
       centerPercent: number(settings.hotzone_center_percent, 50, 0, 100),
       dwellMs: number(settings.hotzone_dwell_ms, 150, 0, 5000),
       hideDelayMs: number(settings.hide_delay_ms, 400, 0, 10000),
+      panelWidth: number(settings.panel_width, 480, 320, 1000),
     };
     hotzoneEnteredAt = null;
     leaveHotzoneAt = null;
@@ -290,14 +293,18 @@ function overlayX(bounds, width) {
 
 function positionOverlay() {
   const bounds = screen.getPrimaryDisplay().bounds;
-  const { width } = overlayWindow.getBounds();
-  overlayWindow.setPosition(overlayX(bounds, width), bounds.y);
+  const width = Math.min(Math.round(hotzoneSettings.panelWidth), bounds.width);
+  const x = overlayX(bounds, width);
+  const current = overlayWindow.getBounds();
+  if (current.x !== x || current.y !== bounds.y || current.width !== width) {
+    overlayWindow.setBounds({ x, y: bounds.y, width });
+  }
 }
 
 function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { y: screenY } = primaryDisplay.bounds;
-  const overlayWidth = 480;
+  const overlayWidth = Math.min(Math.round(hotzoneSettings.panelWidth), primaryDisplay.bounds.width);
   const overlayHeight = 440;
   const x = overlayX(primaryDisplay.bounds, overlayWidth);
 
@@ -465,7 +472,7 @@ function setupTray() {
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule v1.05');
+    tray.setToolTip('OpenSchedule v1.10');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {
@@ -486,6 +493,20 @@ ipcMain.on('get-agent-info-sync', (event) => {
 ipcMain.handle('get-agent-info', () => {
   return readAgentInfo();
 });
+
+function getElectronMemory() {
+  const metrics = app.getAppMetrics();
+  if (!metrics.length || metrics.some(metric => !metric.memory || !Number.isFinite(metric.memory.workingSetSize))) {
+    throw new Error('프로세스 메모리 정보를 가져올 수 없습니다.');
+  }
+  return metrics.reduce((total, metric) => total + metric.memory.workingSetSize, 0);
+}
+
+async function clearHttpCache() {
+  await session.defaultSession.clearCache();
+}
+ipcMain.handle('get-electron-memory', getElectronMemory);
+ipcMain.handle('clear-http-cache', clearHttpCache);
 
 ipcMain.on('window-minimize', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -526,6 +547,14 @@ ipcMain.on('hide-overlay', () => {
 
 ipcMain.on('reload-hotzone-settings', reloadHotzoneSettings);
 
+ipcMain.on('data-changed', event => {
+  for (const window of [mainWindow, overlayWindow]) {
+    if (window && !window.isDestroyed() && window.isVisible() && window.webContents !== event.sender) {
+      window.webContents.send('refresh-data');
+    }
+  }
+});
+
 // 앱 시작
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) {
@@ -549,6 +578,10 @@ if (!hasInstanceLock) {
     ensureRustEngine().catch(error => console.error('[Rust Engine] Startup failed:', error));
     createMainWindow();
     setupTray();
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    startGuiControl({ directory: path.join(appData, 'OpenSchedule'), getMemory: getElectronMemory, clearCache: clearHttpCache })
+      .then(stop => { if (isQuitting) stop(); else stopGuiControl = stop; })
+      .catch(error => console.error('[GUI control] Startup failed:', error));
     startHotzonePolling();
     startDbWatcher();
 
@@ -589,7 +622,8 @@ function startDbWatcher() {
         refreshAgentWatchers();
         notifyWindowsAgentReady();
       }
-      if (filename && (filename.startsWith('todos.db') || filename.startsWith('agent'))) {
+      if (filename === 'todos.db' || (filename === 'todos.db-wal' && eventType === 'change') ||
+          (filename && filename.startsWith('agent'))) {
         triggerRefresh();
       }
     });
@@ -630,6 +664,10 @@ app.on('before-quit', () => {
 });
 
 app.on('will-quit', () => {
+  if (stopGuiControl) {
+    stopGuiControl();
+    stopGuiControl = null;
+  }
   if (rustProcess && rustProcess.exitCode === null && rustProcess.pid) {
     try {
       if (process.platform === 'win32') {

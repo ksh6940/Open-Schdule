@@ -12,6 +12,17 @@ pub fn data_dir() -> PathBuf {
 
 /// 프로젝트 워크스페이스 루트 (`d:\Rust_Workspace\openschdule`) 경로.
 pub fn workspace_root() -> Option<PathBuf> {
+    let is_packaged = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent().map(|dir| {
+                dir.join("resources").join("app").join("electron").join("main.js").is_file()
+            })
+        })
+        .unwrap_or(false);
+    if is_packaged {
+        return None;
+    }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // crates/core -> 상위 2단계가 프로젝트 루트
     let root = manifest_dir.parent()?.parent()?.to_path_buf();

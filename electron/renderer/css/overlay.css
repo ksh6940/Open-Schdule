@@ -6,7 +6,8 @@ body {
 }
 
 body {
-  padding: 8px 12px 16px 12px;
+  margin: 0;
+  padding: 0;
 }
 
 #overlay-card,
@@ -23,25 +24,22 @@ body {
 
 #overlay-card {
   width: 100%;
-  height: calc(100vh - 24px);
-  background: #fafbfd;
-  border-radius: var(--radius-docs-card);
-  border: 1px solid rgba(0, 113, 227, 0.28);
+  height: 100vh;
+  background: var(--apple-surface);
+  border-radius: 0;
+  border: 1px solid var(--apple-border);
   box-shadow: none;
   display: flex;
   flex-direction: column;
-  padding: 16px 18px;
-  gap: 12px;
+  padding: 0;
+  gap: 0;
   opacity: 0;
-  transform-origin: top center;
-  transform: translateY(-8px) scaleY(0.94);
-  transition: opacity 0.16s ease, transform 0.22s ease-out;
+  transition: opacity 0.16s ease;
   pointer-events: none;
 }
 
 #overlay-card.is-visible {
   opacity: 1;
-  transform: translateY(0);
   pointer-events: auto;
 }
 
@@ -55,7 +53,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 10px;
+  padding: 18px 20px;
   border-bottom: 1px solid var(--apple-border);
 }
 
@@ -66,11 +64,11 @@ body {
 }
 
 .overlay-calendar-badge {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background-color: var(--apple-primary);
-  color: var(--apple-on-primary);
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background-color: #eaf3ff;
+  color: var(--apple-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -106,87 +104,27 @@ body {
 }
 
 .overlay-button {
-  padding: 4px 10px;
-  height: 28px;
+  padding: 4px 12px;
+  height: 34px;
   font-size: 12px;
 }
 
-.overlay-button:focus-visible,
-#overlay-quick-time:focus-visible {
+.overlay-button:focus-visible {
   outline: 2px solid var(--apple-primary);
   outline-offset: 2px;
 }
 
-.overlay-progress-pill {
-  background-color: rgba(0, 113, 227, 0.1);
-  color: var(--apple-primary);
-  border-radius: var(--radius-pill);
-  padding: 3px 10px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.overlay-progress-pill.completed {
-  background-color: rgba(52, 199, 89, 0.14);
-  color: var(--apple-success);
-}
-
-.overlay-quick-add {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background-color: var(--apple-surface);
-  border: 1px solid var(--apple-border);
-  border-radius: var(--radius-control);
-  padding: 6px 10px;
-  transition: border-color 0.15s ease;
-}
-
-.overlay-quick-add:focus-within {
-  border-color: var(--apple-primary);
-}
-
-.quick-add-circle {
-  width: 18px;
-  height: 18px;
-  border: 1.5px solid var(--apple-primary);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--apple-primary);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-#overlay-quick-time {
-  border: 1px solid var(--apple-border);
-  border-radius: 6px;
-  padding: 2px 6px;
-  font-size: 12px;
-  background: var(--apple-surface);
-  color: var(--apple-foreground);
-}
-
-.overlay-quick-input {
-  flex: 1;
-  border: none;
-  background: transparent;
-  font-family: var(--font-text);
-  font-size: 14px;
-  color: var(--apple-foreground);
-  outline: none;
-}
-
 .overlay-scroll-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  padding: 0 20px;
 }
 
 .overlay-error {
+  margin: 0 20px;
   color: var(--apple-danger);
   font-size: 12px;
   line-height: 16px;
@@ -201,10 +139,29 @@ body {
   align-items: center;
   gap: 10px;
   background-color: var(--apple-surface);
-  border: 1px solid var(--apple-border);
-  border-radius: var(--radius-control);
-  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--apple-border);
+  border-radius: 0;
+  padding: 12px 2px;
   transition: background-color 0.12s ease;
+}
+
+@media (max-width: 380px) {
+  .overlay-header {
+    padding: 14px 12px;
+  }
+
+  .overlay-scroll-list {
+    padding-inline: 12px;
+  }
+
+  .overlay-header-right {
+    gap: 4px;
+  }
+
+  .overlay-button {
+    padding-inline: 6px;
+  }
 }
 
 .overlay-item:hover {
@@ -241,4 +198,9 @@ body {
   font-size: 12px;
   line-height: 16px;
   color: var(--apple-muted);
+}
+
+.overlay-priority {
+  color: #d34235;
+  font-weight: 700;
 }

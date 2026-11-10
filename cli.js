@@ -9,6 +9,7 @@ const fs = require('fs');
 
 const args = process.argv.slice(2);
 
+const packaged = path.basename(__dirname) === 'app' && path.basename(path.dirname(__dirname)) === 'resources';
 const candidates = [
   path.join(__dirname, 'target', 'debug', 'openlab.exe'),
   path.join(__dirname, 'target', 'release', 'openlab.exe'),
@@ -17,11 +18,11 @@ const candidates = [
   path.join(__dirname, 'target', 'debug', 'openschedule-agent.exe'),
   path.join(__dirname, 'target', 'release', 'openschedule-agent.exe'),
 ];
-if (path.basename(__dirname) === 'app' && path.basename(path.dirname(__dirname)) === 'resources') {
-  candidates.push(path.join(__dirname, '..', '..', 'openlab.exe'));
-}
-
-const exe = candidates.find(p => fs.existsSync(p));
+const packagedExe = packaged ? path.join(__dirname, '..', '..', 'openlab.exe') : null;
+const exe = packagedExe && fs.existsSync(packagedExe) ? packagedExe :
+  candidates.filter(p => fs.existsSync(p))
+    .map(p => ({ path: p, modified: fs.statSync(p).mtimeMs }))
+    .sort((a, b) => b.modified - a.modified)[0]?.path;
 
 if (exe) {
   const res = spawnSync(exe, args, { stdio: 'inherit' });

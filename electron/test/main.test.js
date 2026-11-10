@@ -13,7 +13,8 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
   let now = 1000;
   let cursor = { x: 960, y: 0 };
   const ipc = new EventEmitter();
-  ipc.handle = () => {};
+  const ipcHandlers = {};
+  ipc.handle = (name, handler) => { ipcHandlers[name] = handler; };
   const app = new EventEmitter();
   app.requestSingleInstanceLock = () => lock;
   app.whenReady = () => Promise.resolve();
@@ -42,6 +43,7 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
     showInactive() { this.visible = true; }
     getBounds() { return this.options; }
     setPosition(x, y) { this.options.x = x; this.options.y = y; }
+    setBounds(bounds) { this.boundsChanges = (this.boundsChanges || 0) + 1; Object.assign(this.options, bounds); }
     focus() {}
     isMinimized() { return false; }
     close() {
@@ -70,12 +72,14 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
     nativeImage: {
       createFromDataURL: url => Buffer.from(url.split(',')[1], 'base64'),
     },
+    session: { defaultSession: { clearCache: async () => { cacheClears++; } } },
     screen: {
       getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1920 } }),
       getCursorScreenPoint: () => cursor,
       on() {},
     },
   };
+  let cacheClears = 0;
   const child = new EventEmitter();
   child.pid = 1234;
   child.exitCode = null;
@@ -95,6 +99,7 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
     require: name => {
       if (name === 'electron') return electron;
       if (name === 'fs') return mockFs;
+      if (name === './gui-control') return { startGuiControl: async () => () => {} };
       if (name === 'http') return {
         get: (_options, callback) => {
           queueMicrotask(() => callback({ statusCode: engineStatus, resume() {} }));
@@ -117,13 +122,38 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
     clearTimeout: id => timers.delete(id),
   });
   await new Promise(resolve => setImmediate(resolve));
-  return { app, ipc, windows, tray, watchers, getQuitCount: () => quitCount,
+  return { app, ipc, ipcHandlers, windows, tray, watchers, getQuitCount: () => quitCount, getCacheClears: () => cacheClears,
     getSpawned: () => spawned, getStopped: () => stopped,
     move: point => { cursor = point; }, advance: ms => { now += ms; },
     poll: () => intervals[intervals.length - 1](),
     runTimers: () => { for (const [id, callback] of timers) { timers.delete(id); callback(); } },
   };
 }
+
+test('memory measurement sums Electron process working sets and rejects missing values', async () => {
+  const main = await startMain();
+  main.app.getAppMetrics = () => [{ memory: { workingSetSize: 1024 } }, { memory: { workingSetSize: 2048 } }];
+  assert.equal(main.ipcHandlers['get-electron-memory'](), 3072);
+  main.app.getAppMetrics = () => [{ memory: {} }];
+  assert.throws(() => main.ipcHandlers['get-electron-memory'](), /메모리/);
+});
+
+test('HTTP cache cleanup uses the Electron session', async () => {
+  const main = await startMain();
+  await main.ipcHandlers['clear-http-cache']();
+  assert.equal(main.getCacheClears(), 1);
+});
+
+test('successful changes notify the other visible window immediately', async () => {
+  const main = await startMain({ existingAgent: true });
+  main.poll();
+  main.advance(160);
+  main.poll();
+  const overlay = main.windows[1];
+  const count = overlay.messages.length;
+  main.ipc.emit('data-changed', { sender: main.windows[0].webContents });
+  assert.deepEqual(overlay.messages[count], ['refresh-data']);
+});
 
 test('watches the actual agent schedule directory and refreshes on changes', async () => {
   const dir = path.resolve('test-agent-schedules');
@@ -132,6 +162,26 @@ test('watches the actual agent schedule directory and refreshes on changes', asy
   main.watchers.get(dir)('change', '2026-01-01_schedule.json');
   main.runTimers();
   assert.deepEqual(main.windows[0].messages.at(-1), ['refresh-data']);
+});
+
+test('database reads do not trigger refresh but database and WAL writes do', async () => {
+  const main = await startMain({ existingAgent: true });
+  const dir = path.join(require('os').homedir(), 'AppData', 'Roaming', 'OpenSchedule');
+  const watcher = main.watchers.get(dir);
+  assert.ok(watcher);
+  const messages = main.windows[0].messages.length;
+  for (const [type, name] of [
+    ['rename', 'todos.db-wal'], ['rename', 'todos.db-shm'], ['change', 'todos.db-shm'],
+  ]) watcher(type, name);
+  main.runTimers();
+  assert.equal(main.windows[0].messages.length, messages);
+  watcher('change', 'todos.db-wal');
+  main.runTimers();
+  assert.deepEqual(main.windows[0].messages.at(-1), ['refresh-data']);
+  const afterWal = main.windows[0].messages.length;
+  watcher('change', 'todos.db');
+  main.runTimers();
+  assert.equal(main.windows[0].messages.length, afterWal + 1);
 });
 
 test('close hides the window, tray restores it, and quit stops the owned engine', async () => {
@@ -252,6 +302,31 @@ test('custom hotzone uses configured location, dimensions and dwell time', async
   main.advance(300);
   main.poll();
   assert.equal(overlay.visible, true);
+});
+
+test('overlay width and hide delay can be reloaded', async () => {
+  const settings = { panel_width: 600, hide_delay_ms: 1000 };
+  const main = await startMain({ existingAgent: true, settings });
+  main.poll();
+  main.advance(160);
+  main.poll();
+  const overlay = main.windows[1];
+  assert.equal(overlay.options.width, 600);
+  assert.equal(overlay.options.x, 660);
+  main.ipc.emit('reload-hotzone-settings');
+  assert.equal(overlay.boundsChanges || 0, 0);
+  settings.panel_width = 500;
+  main.ipc.emit('reload-hotzone-settings');
+  assert.equal(overlay.options.width, 500);
+  assert.equal(overlay.options.x, 710);
+  main.move({ x: 100, y: 500 });
+  main.poll();
+  main.advance(999);
+  main.poll();
+  assert.equal(overlay.messages.filter(message => message[0] === 'overlay-visibility').at(-1)[1], true);
+  main.advance(1);
+  main.poll();
+  assert.equal(overlay.messages.at(-1)[1], false);
 });
 
 test('disabled hotzone never opens', async () => {

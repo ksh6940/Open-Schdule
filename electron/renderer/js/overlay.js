@@ -9,7 +9,11 @@ let overlayRenderKey = null;
 let overlayRefreshTimer = null;
 let overlayRevision = 0;
 const overlayPendingTodos = new Set();
-let overlayAdding = false;
+
+function overlayDisplayKey(todos, categories) {
+  return JSON.stringify([getLocalDateStr(), todos, categories], (key, value) =>
+    key === 'created_at' || key === 'updated_at' ? undefined : value);
+}
 
 function getLocalDateStr() {
   const d = new Date();
@@ -21,7 +25,6 @@ function getLocalDateStr() {
 
 document.addEventListener('DOMContentLoaded', () => {
   updateHeaderDate();
-  setupQuickAdd();
 
   document.getElementById('btn-open-manager').addEventListener('click', () => {
     if (window.electronAPI && window.electronAPI.openManager) {
@@ -46,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (window.electronAPI.onRefreshData) {
       window.electronAPI.onRefreshData(() => {
-        if (overlayVisible) scheduleOverlayRefresh();
+        if (overlayVisible) loadOverlayData();
       });
     }
   }
@@ -89,6 +92,15 @@ function scheduleOverlayRefresh() {
   }, 200);
 }
 
+function sortOverlayTodos(todos) {
+  const finished = todo => todo.status === 'done' || todo.status === 'conditional_done';
+  return todos.sort((a, b) => Number(finished(a)) - Number(finished(b)) ||
+    (b.priority || 0) - (a.priority || 0) ||
+    a.due_date.localeCompare(b.due_date) ||
+    (a.due_time == null) - (b.due_time == null) ||
+    (a.due_time || '').localeCompare(b.due_time || '') || a.id - b.id);
+}
+
 async function performOverlayLoad() {
   try {
     const revision = overlayRevision;
@@ -98,32 +110,30 @@ async function performOverlayLoad() {
       return;
     }
 
-    overlayTodos = todos || [];
+    overlayTodos = sortOverlayTodos(todos || []);
     overlayCategories = categories || [];
+    showOverlayError('');
 
-    const renderKey = JSON.stringify([getLocalDateStr(), overlayTodos, overlayCategories]);
+    const renderKey = overlayDisplayKey(overlayTodos, overlayCategories);
     if (renderKey === overlayRenderKey) return;
     renderOverlayList();
-    renderProgressPill();
     overlayRenderKey = renderKey;
   } catch (err) {
     console.error('Failed to load overlay data:', err);
+    showOverlayError('일정을 불러오지 못했습니다.');
   }
 }
 
 function applyOverlayTodo(todo) {
   const today = getLocalDateStr();
   overlayTodos = overlayTodos.filter(item => item.id !== todo.id);
-  if (todo.due_date === today ||
-      (todo.due_date < today && todo.status !== 'done' && todo.status !== 'conditional_done')) {
+  if (todo.due_date <= today &&
+      ((todo.end_date || todo.due_date) >= today || (todo.status !== 'done' && todo.status !== 'conditional_done'))) {
     overlayTodos.push(todo);
   }
-  overlayTodos.sort((a, b) => a.due_date.localeCompare(b.due_date) ||
-    (a.due_time == null) - (b.due_time == null) ||
-    (a.due_time || '').localeCompare(b.due_time || '') || a.id - b.id);
-  overlayRenderKey = JSON.stringify([today, overlayTodos, overlayCategories]);
+  sortOverlayTodos(overlayTodos);
+  overlayRenderKey = overlayDisplayKey(overlayTodos, overlayCategories);
   renderOverlayList();
-  renderProgressPill();
 }
 
 async function updateOverlayStatus(todo, next) {
@@ -134,6 +144,7 @@ async function updateOverlayStatus(todo, next) {
     const updated = await api.toggleStatus(todo.id, next);
     overlayRevision++;
     applyOverlayTodo(updated);
+    showOverlayError('');
     scheduleOverlayRefresh();
   } catch (err) {
     overlayRevision++;
@@ -150,29 +161,6 @@ function showOverlayError(message) {
   if (error) error.textContent = message;
 }
 
-function renderProgressPill() {
-  const pill = document.getElementById('overlay-progress-pill');
-  if (!pill) return;
-
-  const total = overlayTodos.length;
-  const done = overlayTodos.filter(t => t.status === 'done' || t.status === 'conditional_done').length;
-
-  if (total === 0) {
-    pill.textContent = '할 일 없음';
-    pill.classList.remove('completed');
-    return;
-  }
-
-  const pct = Math.round((done / total) * 100);
-  pill.textContent = `${done}/${total} 완료 (${pct}%)`;
-
-  if (pct === 100) {
-    pill.classList.add('completed');
-  } else {
-    pill.classList.remove('completed');
-  }
-}
-
 function renderOverlayList() {
   const container = document.getElementById('overlay-list-container');
   if (!container) return;
@@ -180,7 +168,7 @@ function renderOverlayList() {
   if (overlayTodos.length === 0) {
     container.innerHTML = `
       <div style="text-align: center; padding: 30px 10px; color: var(--apple-muted); font-size: 13.5px; display: flex; align-items: center; justify-content: center; gap: 6px;">
-        <i class="ph-bold ph-check-circle" style="color: var(--apple-primary); font-size: 20px;"></i> 오늘 예정된 미리알림이 없습니다
+        오늘 예정된 미리알림이 없습니다
       </div>
     `;
     return;
@@ -193,7 +181,7 @@ function renderOverlayList() {
 
   overlayTodos.forEach(todo => {
     const isFinished = todo.status === 'done' || todo.status === 'conditional_done';
-    const isOverdue = !isFinished && todo.due_date < todayStr;
+    const isOverdue = !isFinished && (todo.end_date || todo.due_date) < todayStr;
 
     let catHtml = '';
     if (todo.category_id != null) {
@@ -210,6 +198,9 @@ function renderOverlayList() {
     }
 
     let metaHtml = '';
+    if (todo.priority) {
+      metaHtml += `<span class="overlay-priority" aria-label="긴급도 ${todo.priority}단계">${'!'.repeat(todo.priority)}</span>`;
+    }
     if (todo.due_time) {
       metaHtml += `<span><i class="ph ph-clock"></i> ${todo.due_time}</span>`;
     }
@@ -241,80 +232,19 @@ function renderOverlayList() {
 
     const checkEl = row.querySelector('.apple-checkbox');
     checkEl.addEventListener('click', async () => {
-      const next = todo.status === 'done' ? 'in_progress' : 'done';
+      const next = nextTodoStatus(todo.status);
       await updateOverlayStatus(todo, next);
     });
 
     const pillEl = row.querySelector('.status-pill');
     pillEl.addEventListener('click', async () => {
-      const cycle = {
-        planned: 'in_progress',
-        in_progress: 'conditional_done',
-        conditional_done: 'done',
-        done: 'planned',
-      };
-      const next = cycle[todo.status] || 'planned';
+      const next = nextTodoStatus(todo.status);
       await updateOverlayStatus(todo, next);
     });
 
     fragment.appendChild(row);
   });
   container.appendChild(fragment);
-}
-
-function setupQuickAdd() {
-  const input = document.getElementById('overlay-quick-input');
-  const timeInput = document.getElementById('overlay-quick-time');
-  const btn = document.getElementById('btn-overlay-quick-add');
-  if (!input) return;
-
-  const submit = async () => {
-    const title = input.value.trim();
-    if (!title || overlayAdding) return;
-
-    const todayStr = getLocalDateStr();
-    const draft = {
-      title,
-      memo: '',
-      category_id: null,
-      due_date: todayStr,
-      due_time: (timeInput && timeInput.value) ? timeInput.value : null,
-      status: 'planned',
-      condition_note: '',
-    };
-
-    overlayAdding = true;
-    if (btn) btn.disabled = true;
-    overlayRevision++;
-    try {
-      const todo = await api.createTodo(draft);
-      overlayRevision++;
-      if (input.value.trim() === title) input.value = '';
-      if (timeInput && (timeInput.value || null) === draft.due_time) timeInput.value = '';
-      applyOverlayTodo(todo);
-      showOverlayError('');
-      scheduleOverlayRefresh();
-    } catch (err) {
-      overlayRevision++;
-      console.error('Failed to create todo in overlay:', err);
-      showOverlayError('일정을 추가하지 못했습니다.');
-      scheduleOverlayRefresh();
-    } finally {
-      overlayAdding = false;
-      if (btn) btn.disabled = false;
-    }
-  };
-
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      submit();
-    }
-  });
-
-  if (btn) {
-    btn.addEventListener('click', submit);
-  }
 }
 
 function getStatusLabel(s) {

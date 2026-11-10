@@ -307,14 +307,7 @@ body {
 
 .apple-checkbox.in-progress {
   border-color: var(--apple-warning);
-}
-
-.apple-checkbox.in-progress::after {
-  content: '';
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background-color: var(--apple-warning);
+  background: linear-gradient(90deg, var(--apple-warning) 50%, transparent 50%);
 }
 
 .apple-checkbox.conditional {
@@ -415,4 +408,3 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(110, 110, 115, 0.45);
 }
-

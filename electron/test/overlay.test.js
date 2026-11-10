@@ -6,12 +6,13 @@ const vm = require('node:vm');
 
 test('overlay renders only when the data changes', async () => {
   let title = 'first';
+  let updatedAt = 'first';
   let renders = 0;
   const context = {
-    document: { addEventListener() {} },
+    document: { addEventListener() {}, getElementById() { return null; } },
     api: {
       getOverlayData: async () => ({
-        todos: [{ id: 1, title }],
+        todos: [{ id: 1, title, updated_at: updatedAt }],
         categories: [{ id: 1, name: 'work' }],
       }),
     },
@@ -20,8 +21,9 @@ test('overlay renders only when the data changes', async () => {
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'overlay.js'), 'utf8'), context);
-  vm.runInContext('renderOverlayList = countRender; renderProgressPill = () => {}', context);
+  vm.runInContext('renderOverlayList = countRender', context);
   await vm.runInContext('loadOverlayData()', context);
+  updatedAt = 'second';
   await vm.runInContext('loadOverlayData()', context);
   assert.equal(renders, 1);
   title = 'updated';
@@ -73,7 +75,7 @@ test('duplicate status clicks are coalesced and the confirmed result renders imm
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'overlay.js'), 'utf8'), context);
-  vm.runInContext("renderOverlayList = countRender; renderProgressPill = () => {}; overlayTodos = [{id: 1, status: 'planned', due_date: getLocalDateStr()}]", context);
+  vm.runInContext("renderOverlayList = countRender; overlayTodos = [{id: 1, status: 'planned', due_date: getLocalDateStr()}]", context);
   const first = vm.runInContext("updateOverlayStatus(overlayTodos[0], 'done')", context);
   const second = vm.runInContext("updateOverlayStatus(overlayTodos[0], 'done')", context);
   assert.equal(calls, 1);
@@ -82,6 +84,29 @@ test('duplicate status clicks are coalesced and the confirmed result renders imm
   await Promise.all([first, second]);
   assert.equal(renders, 1);
   assert.equal(vm.runInContext('overlayTodos[0].status', context), 'done');
+});
+
+test('overlay sorts unfinished items by priority then date and time', () => {
+  const context = { document: { addEventListener() {} }, console };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'overlay.js'), 'utf8'), context);
+  context.todos = [
+    { id: 1, priority: 3, status: 'done', due_date: '2030-01-01', reminder_at: '2030-01-01T08:00:00' },
+    { id: 2, priority: 2, status: 'planned', due_date: '2030-01-01', reminder_at: '2030-01-01T07:00:00' },
+    { id: 3, priority: 3, status: 'planned', due_date: '2030-01-01', reminder_at: null },
+    { id: 4, priority: 3, status: 'planned', due_date: '2030-01-01', reminder_at: '2030-01-01T09:00:00' },
+    { id: 5, priority: 3, status: 'planned', due_date: '2030-01-01', reminder_at: '2030-01-01T08:00:00' },
+  ];
+  assert.deepEqual(Array.from(vm.runInContext('sortOverlayTodos(todos).map(t => t.id)', context)), [3, 4, 5, 2, 1]);
+});
+
+test('todo status cycles through planned, in progress and done', () => {
+  const context = { window: {}, console, URLSearchParams };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'api.js'), 'utf8'), context);
+  assert.equal(vm.runInContext("nextTodoStatus('planned')", context), 'in_progress');
+  assert.equal(vm.runInContext("nextTodoStatus('in_progress')", context), 'done');
+  assert.equal(vm.runInContext("nextTodoStatus('done')", context), 'planned');
 });
 
 test('dashboard fallback preserves existing engine compatibility', async () => {
@@ -105,6 +130,30 @@ test('dashboard fallback preserves existing engine compatibility', async () => {
   assert.equal(data.todos.length, 1);
   await api.getDashboardData();
   assert.equal(combinedCalls, 1);
+});
+
+test('only successful mutations notify other windows', async () => {
+  let notifications = 0;
+  let ok = true;
+  const context = {
+    window: { electronAPI: {
+      getAgentInfo: () => ({ port: 1, token: 'test' }),
+      notifyDataChanged: () => { notifications++; },
+    } },
+    console, URLSearchParams, setTimeout,
+    fetch: async () => ok
+      ? { ok: true, headers: { get: () => 'application/json' }, json: async () => ({}) }
+      : { ok: false, status: 400, text: async () => 'invalid' },
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'js', 'api.js'), 'utf8'), context);
+  await context.window.api.request('/api/todos');
+  assert.equal(notifications, 0);
+  await context.window.api.request('/api/todos', { method: 'POST' });
+  assert.equal(notifications, 1);
+  ok = false;
+  await assert.rejects(context.window.api.request('/api/todos', { method: 'POST' }), /400/);
+  assert.equal(notifications, 1);
 });
 
 test('read retries after agent changes but mutations are never retried', async () => {

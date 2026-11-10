@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Category, Status, Todo, TodoDraft};
+use crate::model::{Category, Status, Subtask, Todo, TodoDraft};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateFilter {
@@ -65,8 +65,16 @@ pub struct TodoJsonEntry {
     pub category_name: String,
     #[serde(default = "default_due_date")]
     pub due_date: NaiveDate,
+    #[serde(default, deserialize_with = "deserialize_optional_end_date", skip_serializing_if = "Option::is_none")]
+    pub end_date: Option<Option<NaiveDate>>,
     #[serde(default)]
     pub due_time: Option<NaiveTime>,
+    #[serde(default, deserialize_with = "deserialize_optional_reminder", skip_serializing_if = "Option::is_none")]
+    pub reminder_at: Option<Option<NaiveDateTime>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtasks: Option<Vec<Subtask>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
     #[serde(default)]
     pub status: Status,
     #[serde(default)]
@@ -79,6 +87,20 @@ pub struct TodoJsonEntry {
 
 fn default_due_date() -> NaiveDate {
     Local::now().date_naive()
+}
+
+fn deserialize_optional_end_date<'de, D>(deserializer: D) -> Result<Option<Option<NaiveDate>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<NaiveDate>::deserialize(deserializer)?))
+}
+
+fn deserialize_optional_reminder<'de, D>(deserializer: D) -> Result<Option<Option<NaiveDateTime>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<NaiveDateTime>::deserialize(deserializer)?))
 }
 
 fn schedule_matches(path: &Path, date: &str, entries: &[TodoJsonEntry]) -> Result<bool> {
@@ -173,6 +195,33 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let migration = (|| -> Result<()> {
+            let mut statement = conn.prepare("PRAGMA table_info(todos)")?;
+            let columns = statement.query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if !columns.iter().any(|column| column == "end_date") {
+                conn.execute("ALTER TABLE todos ADD COLUMN end_date TEXT", [])?;
+            }
+            if !columns.iter().any(|column| column == "reminder_at") {
+                conn.execute("ALTER TABLE todos ADD COLUMN reminder_at TEXT", [])?;
+            }
+            if !columns.iter().any(|column| column == "subtasks") {
+                conn.execute("ALTER TABLE todos ADD COLUMN subtasks TEXT NOT NULL DEFAULT '[]'", [])?;
+            }
+            if !columns.iter().any(|column| column == "priority") {
+                conn.execute("ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0", [])?;
+            }
+            conn.execute("UPDATE todos SET status = 'done' WHERE status = 'conditional_done'", [])?;
+            Ok(())
+        })();
+        match migration {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(error) => {
+                conn.execute_batch("ROLLBACK")?;
+                return Err(error);
+            }
+        }
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM categories", [], |r| r.get(0))?;
         if count == 0 {
             for (name, color) in DEFAULT_CATEGORIES {
@@ -200,13 +249,16 @@ impl Store {
         if !self.sync_json {
             return Ok(primary_path);
         }
-
-        let todos = self.query(&TodoQuery {
-            date: DateFilter::Day(date),
-            ..Default::default()
-        })?;
-        let cats = self.categories()?;
         let appdata_path = crate::paths::appdata_date_schedule_json_path(date);
+        self.save_date_json_to(date, primary_path, appdata_path)
+    }
+
+    fn save_date_json_to(&self, date: NaiveDate, primary_path: PathBuf, appdata_path: PathBuf) -> Result<PathBuf> {
+        let sql = format!("SELECT {} FROM todos WHERE due_date = ?1 ORDER BY due_date, due_time IS NULL, due_time, id", Self::COLS);
+        let mut statement = self.conn.prepare(&sql)?;
+        let todos = statement.query_map(params![date.to_string()], Self::row_to_todo)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let cats = self.categories()?;
 
         let entries: Vec<TodoJsonEntry> = todos
             .into_iter()
@@ -222,7 +274,11 @@ impl Store {
                     category_id: t.category_id,
                     category_name: cat_name,
                     due_date: t.due_date,
+                    end_date: Some(t.end_date),
                     due_time: t.due_time,
+                    reminder_at: Some(t.reminder_at),
+                    subtasks: Some(t.subtasks),
+                    priority: Some(t.priority),
                     status: t.status,
                     condition_note: t.condition_note,
                     created_at: t.created_at,
@@ -312,7 +368,7 @@ impl Store {
                 (None, list)
             };
 
-        let existing_cats = self.categories().unwrap_or_default();
+        let existing_cats = self.categories()?;
         let mut imported = 0;
         for entry in entries {
             if entry.title.trim().is_empty() {
@@ -338,22 +394,52 @@ impl Store {
             } else {
                 None
             };
+            let existing = match existing {
+                Some(todo) => Some(todo),
+                None => {
+                    let id = self.conn.query_row(
+                        "SELECT id FROM todos WHERE due_date=?1 AND title=?2 LIMIT 1",
+                        params![resolved_date.to_string(), entry.title.trim()],
+                        |r| r.get::<_, i64>(0),
+                    ).optional()?;
+                    match id {
+                        Some(id) => self.get(id)?,
+                        None => None,
+                    }
+                }
+            };
 
+            let end_date = match entry.end_date {
+                Some(end) => end,
+                None => match existing.as_ref() {
+                    Some(todo) => match todo.end_date {
+                        Some(end) => Some(end.checked_add_signed(resolved_date - todo.due_date)
+                            .context("일정 종료일 범위를 벗어났습니다.")?),
+                        None => None,
+                    },
+                    None => None,
+                },
+            };
             let draft = TodoDraft {
                 title: entry.title.trim().to_string(),
                 memo: entry.memo,
                 category_id: cat_id,
                 due_date: resolved_date,
+                end_date,
                 due_time: entry.due_time,
-                status: entry.status,
+                reminder_at: entry.reminder_at.unwrap_or_else(|| existing.as_ref().and_then(|todo| todo.reminder_at)),
+                subtasks: entry.subtasks.unwrap_or_else(|| existing.as_ref().map(|todo| todo.subtasks.clone()).unwrap_or_default()),
+                priority: entry.priority.unwrap_or_else(|| existing.as_ref().map_or(0, |todo| todo.priority)),
+                status: if entry.status == Status::ConditionalDone { Status::Done } else { entry.status },
                 condition_note: entry.condition_note,
             };
 
+            Self::validate_draft(&draft)?;
             if let Some(existing) = existing {
                 if existing.to_draft() != draft || existing.updated_at != entry.updated_at {
                     self.conn.execute(
                         "UPDATE todos SET title=?1, memo=?2, category_id=?3, due_date=?4, due_time=?5, status=?6,
-                         condition_note=?7, updated_at=?8 WHERE id=?9",
+                         condition_note=?7, updated_at=?8, end_date=?10, reminder_at=?11, subtasks=?12, priority=?13 WHERE id=?9",
                         params![
                             draft.title,
                             draft.memo,
@@ -363,7 +449,11 @@ impl Store {
                             draft.status.as_db(),
                             draft.condition_note,
                             entry.updated_at.to_rfc3339(),
-                            entry.id
+                            existing.id,
+                            draft.end_date.map(|d| d.to_string()),
+                            draft.reminder_at.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+                            serde_json::to_string(&draft.subtasks)?,
+                            draft.priority
                         ],
                     )?;
                 }
@@ -385,8 +475,8 @@ impl Store {
                 } else {
                     let now = Local::now().to_rfc3339();
                     self.conn.execute(
-                        "INSERT INTO todos(title, memo, category_id, due_date, due_time, status, condition_note, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                        "INSERT INTO todos(title, memo, category_id, due_date, due_time, status, condition_note, created_at, updated_at, end_date, reminder_at, subtasks, priority)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10, ?11, ?12)",
                         params![
                             draft.title,
                             draft.memo,
@@ -395,7 +485,11 @@ impl Store {
                             draft.due_time.map(|t| t.format("%H:%M").to_string()),
                             draft.status.as_db(),
                             draft.condition_note,
-                            now
+                            now,
+                            draft.end_date.map(|d| d.to_string()),
+                            draft.reminder_at.map(|d| d.format("%Y-%m-%dT%H:%M:%S").to_string()),
+                            serde_json::to_string(&draft.subtasks)?,
+                            draft.priority
                         ],
                     )?;
                 }
@@ -543,6 +637,9 @@ impl Store {
         let status: String = r.get(6)?;
         let created: String = r.get(8)?;
         let updated: String = r.get(9)?;
+        let end_date: Option<String> = r.get(10)?;
+        let reminder_at: Option<String> = r.get(11)?;
+        let subtasks: String = r.get(12)?;
         Ok(Todo {
             id: r.get(0)?,
             title: r.get(1)?,
@@ -550,11 +647,18 @@ impl Store {
             category_id: r.get(3)?,
             due_date: NaiveDate::parse_from_str(&due_date, "%Y-%m-%d")
                 .unwrap_or_else(|_| Local::now().date_naive()),
+            end_date: end_date.map(|date| NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
             due_time: due_time.and_then(|t| {
                 NaiveTime::parse_from_str(&t, "%H:%M")
                     .or_else(|_| NaiveTime::parse_from_str(&t, "%H:%M:%S"))
                     .ok()
             }),
+            reminder_at: reminder_at.map(|date| NaiveDateTime::parse_from_str(&date, "%Y-%m-%dT%H:%M:%S")
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
+            subtasks: serde_json::from_str(&subtasks)
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(12, rusqlite::types::Type::Text, Box::new(error)))?,
+            priority: r.get(13)?,
             status: Status::from_db(&status),
             condition_note: r.get(7)?,
             created_at: chrono::DateTime::parse_from_rfc3339(&created)
@@ -567,7 +671,14 @@ impl Store {
     }
 
     const COLS: &'static str =
-        "id, title, memo, category_id, due_date, due_time, status, condition_note, created_at, updated_at";
+        "id, title, memo, category_id, due_date, due_time, status, condition_note, created_at, updated_at, end_date, reminder_at, subtasks, priority";
+
+    fn validate_draft(d: &TodoDraft) -> Result<()> {
+        anyhow::ensure!(d.end_date.map_or(true, |end| end >= d.due_date), "종료일은 시작일보다 빠를 수 없습니다.");
+        anyhow::ensure!(d.subtasks.iter().all(|item| !item.title.trim().is_empty()), "세부 할 일 제목을 입력해주세요.");
+        anyhow::ensure!(d.priority <= 3, "긴급도는 0부터 3까지 설정할 수 있습니다.");
+        Ok(())
+    }
 
     pub fn get(&self, id: i64) -> Result<Option<Todo>> {
         let sql = format!("SELECT {} FROM todos WHERE id=?1", Self::COLS);
@@ -578,19 +689,24 @@ impl Store {
     }
 
     pub fn add(&self, d: &TodoDraft) -> Result<i64> {
+        Self::validate_draft(d)?;
         let now = Local::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO todos(title, memo, category_id, due_date, due_time, status, condition_note, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            "INSERT INTO todos(title, memo, category_id, due_date, due_time, status, condition_note, created_at, updated_at, end_date, reminder_at, subtasks, priority)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10, ?11, ?12)",
             params![
                 d.title.trim(),
                 d.memo,
                 d.category_id,
                 d.due_date.format("%Y-%m-%d").to_string(),
                 d.due_time.map(|t| t.format("%H:%M").to_string()),
-                d.status.as_db(),
+                d.status.current().as_db(),
                 d.condition_note,
-                now
+                now,
+                d.end_date.map(|date| date.to_string()),
+                d.reminder_at.map(|date| date.format("%Y-%m-%dT%H:%M:%S").to_string()),
+                serde_json::to_string(&d.subtasks)?,
+                d.priority
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -599,20 +715,25 @@ impl Store {
     }
 
     pub fn update(&self, id: i64, d: &TodoDraft) -> Result<()> {
+        Self::validate_draft(d)?;
         let old_date = self.get(id)?.map(|t| t.due_date);
         self.conn.execute(
             "UPDATE todos SET title=?1, memo=?2, category_id=?3, due_date=?4, due_time=?5, status=?6,
-                 condition_note=?7, updated_at=?8 WHERE id=?9",
+                 condition_note=?7, updated_at=?8, end_date=?10, reminder_at=?11, subtasks=?12, priority=?13 WHERE id=?9",
             params![
                 d.title.trim(),
                 d.memo,
                 d.category_id,
                 d.due_date.format("%Y-%m-%d").to_string(),
                 d.due_time.map(|t| t.format("%H:%M").to_string()),
-                d.status.as_db(),
+                d.status.current().as_db(),
                 d.condition_note,
                 Local::now().to_rfc3339(),
-                id
+                id,
+                d.end_date.map(|date| date.to_string()),
+                d.reminder_at.map(|date| date.format("%Y-%m-%dT%H:%M:%S").to_string()),
+                serde_json::to_string(&d.subtasks)?,
+                d.priority
             ],
         )?;
         self.save_date_json(d.due_date).context("DB 변경 후 JSON 동기화 실패")?;
@@ -628,7 +749,7 @@ impl Store {
         let target_date = self.get(id)?.map(|t| t.due_date);
         self.conn.execute(
             "UPDATE todos SET status=?1, updated_at=?2 WHERE id=?3",
-            params![status.as_db(), Local::now().to_rfc3339(), id],
+            params![status.current().as_db(), Local::now().to_rfc3339(), id],
         )?;
         if let Some(d) = target_date {
             self.save_date_json(d).context("DB 변경 후 JSON 동기화 실패")?;
@@ -656,11 +777,12 @@ impl Store {
         match q.date {
             DateFilter::All => {}
             DateFilter::Today => {
-                sql += " AND due_date = ?";
+                sql += " AND due_date <= ? AND COALESCE(end_date, due_date) >= ?";
+                args.push(Box::new(fmt(today)));
                 args.push(Box::new(fmt(today)));
             }
             DateFilter::TodayAndOverdue => {
-                sql += " AND (due_date = ? OR (due_date < ? AND status NOT IN ('done','conditional_done')))";
+                sql += " AND due_date <= ? AND (COALESCE(end_date, due_date) >= ? OR status NOT IN ('done','conditional_done'))";
                 args.push(Box::new(fmt(today)));
                 args.push(Box::new(fmt(today)));
             }
@@ -671,7 +793,7 @@ impl Store {
             DateFilter::ThisWeek => {
                 let start = today - Duration::days(today.weekday().num_days_from_monday() as i64);
                 let end = start + Duration::days(6);
-                sql += " AND due_date BETWEEN ? AND ?";
+                sql += " AND COALESCE(end_date, due_date) >= ? AND due_date <= ?";
                 args.push(Box::new(fmt(start)));
                 args.push(Box::new(fmt(end)));
             }
@@ -679,11 +801,12 @@ impl Store {
                 sql += " AND status IN ('done','conditional_done')";
             }
             DateFilter::Day(d) => {
-                sql += " AND due_date = ?";
+                sql += " AND due_date <= ? AND COALESCE(end_date, due_date) >= ?";
+                args.push(Box::new(fmt(d)));
                 args.push(Box::new(fmt(d)));
             }
             DateFilter::Range(a, b) => {
-                sql += " AND due_date BETWEEN ? AND ?";
+                sql += " AND COALESCE(end_date, due_date) >= ? AND due_date <= ?";
                 args.push(Box::new(fmt(a)));
                 args.push(Box::new(fmt(b)));
             }
@@ -736,7 +859,13 @@ impl Store {
 
         let mut map: HashMap<NaiveDate, Vec<Todo>> = HashMap::new();
         for t in todos {
-            map.entry(t.due_date).or_default().push(t);
+            let mut day = t.due_date.max(first_day);
+            let end = t.end_date.unwrap_or(t.due_date).min(last_day);
+            while day <= end {
+                map.entry(day).or_default().push(t.clone());
+                if day == end { break; }
+                day = day.succ_opt().expect("day before end has a successor");
+            }
         }
         Ok(map)
     }
@@ -784,7 +913,7 @@ impl Store {
     pub fn smart_counts(&self) -> Result<SmartCounts> {
         let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
         let today_count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM todos WHERE (due_date = ?1 OR (due_date < ?1 AND status NOT IN ('done', 'conditional_done')))",
+            "SELECT COUNT(*) FROM todos WHERE due_date <= ?1 AND (COALESCE(end_date, due_date) >= ?1 OR status NOT IN ('done', 'conditional_done'))",
             params![today],
             |r| r.get(0),
         )?;
@@ -853,7 +982,11 @@ mod tests {
             category_id: todo.category_id,
             category_name: "미분류".into(),
             due_date: todo.due_date,
+            end_date: Some(todo.end_date),
             due_time: todo.due_time,
+            reminder_at: Some(todo.reminder_at),
+            subtasks: Some(todo.subtasks),
+            priority: Some(todo.priority),
             status: todo.status,
             condition_note: todo.condition_note,
             created_at: todo.created_at,
@@ -934,6 +1067,174 @@ mod tests {
 
         s.delete(id).unwrap();
         assert!(s.get(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn reminders_and_subtasks_persist_and_survive_legacy_json() {
+        let store = Store::open_in_memory().unwrap();
+        let date = NaiveDate::from_ymd_opt(2030, 1, 1).unwrap();
+        let mut draft = TodoDraft::new("task", date);
+        draft.reminder_at = Some(date.and_hms_opt(9, 30, 0).unwrap());
+        draft.subtasks = vec![Subtask { title: "step".into(), done: true }];
+        draft.priority = 3;
+        let id = store.add(&draft).unwrap();
+        assert_eq!(store.get(id).unwrap().unwrap().to_draft(), draft);
+        let path = std::env::temp_dir().join(format!(
+            "openschedule-details-{}-{}.json", std::process::id(),
+            Local::now().timestamp_nanos_opt().unwrap()
+        ));
+        let backup = path.with_extension("backup");
+        store.save_date_json_to(date, path.clone(), backup.clone()).unwrap();
+        let copy = Store::open_in_memory().unwrap();
+        copy.import_date_json_file(&path).unwrap();
+        assert_eq!(copy.query(&TodoQuery::default()).unwrap()[0].to_draft(), draft);
+        std::fs::write(&path, serde_json::json!([{
+            "id": id, "title": "task", "due_date": date.to_string()
+        }]).to_string()).unwrap();
+        store.import_date_json_file(&path).unwrap();
+        let restored = store.get(id).unwrap().unwrap();
+        assert_eq!(restored.reminder_at, draft.reminder_at);
+        assert_eq!(restored.subtasks, draft.subtasks);
+        assert_eq!(restored.priority, 3);
+        std::fs::write(&path, serde_json::json!([{
+            "id": id, "title": "task", "due_date": date.to_string(),
+            "reminder_at": null, "subtasks": []
+        }]).to_string()).unwrap();
+        store.import_date_json_file(&path).unwrap();
+        let cleared = store.get(id).unwrap().unwrap();
+        assert_eq!(cleared.reminder_at, None);
+        assert!(cleared.subtasks.is_empty());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(backup).unwrap();
+    }
+
+    #[test]
+    fn legacy_database_migrates_priority_without_losing_todos() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let now = Local::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO todos(title, due_date, created_at, updated_at, status) VALUES (?1, ?2, ?3, ?3, 'conditional_done')",
+            params!["legacy", "2030-01-01", now],
+        ).unwrap();
+        let store = Store::init(conn, false).unwrap();
+        let todo = store.get(1).unwrap().unwrap();
+        assert_eq!(todo.title, "legacy");
+        assert_eq!(todo.status, Status::Done);
+        assert_eq!(todo.priority, 0);
+        assert!(todo.subtasks.is_empty());
+        assert_eq!(todo.reminder_at, None);
+        let mut draft = todo.to_draft();
+        draft.priority = 4;
+        assert!(store.update(todo.id, &draft).is_err());
+        assert_eq!(store.get(todo.id).unwrap().unwrap().priority, 0);
+    }
+
+    #[test]
+    fn importing_legacy_conditional_status_converts_to_done() {
+        let store = Store::open_in_memory().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "openschedule-legacy-status-{}-{}.json", std::process::id(),
+            Local::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::write(&path, serde_json::json!([{
+            "title": "legacy", "due_date": "2030-01-01",
+            "status": "conditional_done", "condition_note": "keep note"
+        }]).to_string()).unwrap();
+        store.import_date_json_file(&path).unwrap();
+        let todo = store.query(&TodoQuery::default()).unwrap().remove(0);
+        assert_eq!(todo.status, Status::Done);
+        assert_eq!(todo.condition_note, "keep note");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn period_events_migrate_persist_query_and_import() {
+        let path = std::env::temp_dir().join(format!(
+            "openschedule-period-{}-{}.db", std::process::id(),
+            Local::now().timestamp_nanos_opt().unwrap()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        let store = Store::init(conn, false).unwrap();
+        let today = Local::now().date_naive();
+        let mut draft = TodoDraft::new("period", today - Duration::days(1));
+        draft.end_date = Some(today + Duration::days(2));
+        let id = store.add(&draft).unwrap();
+        drop(store);
+
+        let store = Store::init(Connection::open(&path).unwrap(), false).unwrap();
+        let event = store.get(id).unwrap().unwrap();
+        assert_eq!(event.end_date, draft.end_date);
+        assert!(!event.is_overdue(today));
+        for day in [today - Duration::days(1), today, today + Duration::days(2)] {
+            let query = TodoQuery { date: DateFilter::Day(day), ..Default::default() };
+            assert_eq!(store.query(&query).unwrap().len(), 1);
+        }
+        let query = TodoQuery { date: DateFilter::Day(today + Duration::days(3)), ..Default::default() };
+        assert!(store.query(&query).unwrap().is_empty());
+        assert_eq!(store.smart_counts().unwrap().today, 1);
+        assert_eq!(store.todos_by_month(today.year(), today.month()).unwrap().get(&today).unwrap().len(), 1);
+        let mut invalid = draft.clone();
+        invalid.end_date = Some(draft.due_date - Duration::days(1));
+        assert!(store.update(id, &invalid).is_err());
+        assert_eq!(store.get(id).unwrap().unwrap().end_date, draft.end_date);
+
+        let json_path = path.with_extension("json");
+        let legacy = serde_json::json!([{
+            "id": id, "title": "period edited", "due_date": draft.due_date.to_string(),
+            "updated_at": event.updated_at
+        }]);
+        std::fs::write(&json_path, legacy.to_string()).unwrap();
+        store.import_date_json_file(&json_path).unwrap();
+        assert_eq!(store.get(id).unwrap().unwrap().end_date, draft.end_date);
+        let mut with_end = legacy;
+        with_end[0]["end_date"] = serde_json::json!(today.to_string());
+        std::fs::write(&json_path, with_end.to_string()).unwrap();
+        store.import_date_json_file(&json_path).unwrap();
+        assert_eq!(store.get(id).unwrap().unwrap().end_date, Some(today));
+        with_end[0]["end_date"] = serde_json::Value::Null;
+        std::fs::write(&json_path, with_end.to_string()).unwrap();
+        store.import_date_json_file(&json_path).unwrap();
+        assert_eq!(store.get(id).unwrap().unwrap().end_date, None);
+        store.delete(id).unwrap();
+        assert!(store.get(id).unwrap().is_none());
+        drop(store);
+        std::fs::remove_file(json_path).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn period_json_is_written_only_for_start_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!(
+            "openschedule-period-json-{}-{}", std::process::id(),
+            Local::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let start = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let end = start + Duration::days(2);
+        let mut draft = TodoDraft::new("period", start);
+        draft.end_date = Some(end);
+        let id = store.add(&draft).unwrap();
+        let primary = dir.join(format!("{start}_schedule.json"));
+        let backup = dir.join("backup.json");
+        let later = dir.join(format!("{end}_schedule.json"));
+        let later_backup = dir.join("later-backup.json");
+        store.save_date_json_to(start, primary.clone(), backup.clone()).unwrap();
+        store.save_date_json_to(end, later.clone(), later_backup).unwrap();
+        assert!(!later.exists());
+        let data: DailyScheduleFile = serde_json::from_slice(&std::fs::read(&primary).unwrap()).unwrap();
+        assert_eq!(data.todos.len(), 1);
+        assert_eq!(data.todos[0].end_date, Some(Some(end)));
+        let imported = Store::open_in_memory().unwrap();
+        imported.import_date_json_file(&primary).unwrap();
+        assert_eq!(imported.query(&TodoQuery::default()).unwrap()[0].end_date, Some(end));
+        store.delete(id).unwrap();
+        store.save_date_json_to(start, primary.clone(), backup.clone()).unwrap();
+        assert!(!primary.exists());
+        assert!(!backup.exists());
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

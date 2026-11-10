@@ -44,7 +44,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openManager: () => ipcRenderer.send('open-manager'),
   hideOverlay: () => ipcRenderer.send('hide-overlay'),
   reloadHotzoneSettings: () => ipcRenderer.send('reload-hotzone-settings'),
+  getElectronMemory: () => ipcRenderer.invoke('get-electron-memory'),
+  clearHttpCache: () => ipcRenderer.invoke('clear-http-cache'),
   onOverlayVisibility: (callback) => ipcRenderer.on('overlay-visibility', (_e, visible) => callback(visible)),
   onRefreshData: (callback) => ipcRenderer.on('refresh-data', callback),
+  notifyDataChanged: () => ipcRenderer.send('data-changed'),
   onAgentReady: (callback) => ipcRenderer.on('agent-ready', callback),
 });

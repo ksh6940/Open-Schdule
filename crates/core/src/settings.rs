@@ -27,7 +27,7 @@ impl Default for Settings {
             hotzone_center_percent: 50.0,
             hotzone_dwell_ms: 150,
             hide_delay_ms: 400,
-            panel_width: 420.0,
+            panel_width: 480.0,
             autostart: false,
         }
     }

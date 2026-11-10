@@ -67,10 +67,12 @@ class ApiClient {
       }
 
       const contentType = resp.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        return await resp.json();
+      const result = contentType.includes('application/json') ? await resp.json() : await resp.text();
+      if (options.method && options.method.toUpperCase() !== 'GET' &&
+          window.electronAPI && window.electronAPI.notifyDataChanged) {
+        window.electronAPI.notifyDataChanged();
       }
-      return await resp.text();
+      return result;
     };
     const previousUrl = this.baseUrl;
     const previousToken = this.token;
@@ -140,6 +142,30 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(draft),
     });
+  }
+
+  async requireTodoDetailsSupport() {
+    let capabilities;
+    try {
+      capabilities = await this.request('/api/capabilities');
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      throw new Error('세부 할 일을 사용하려면 엔진을 업데이트하고 다시 실행해주세요.');
+    }
+    if (!capabilities.reminders_and_subtasks) {
+      throw new Error('세부 할 일을 사용하려면 엔진을 업데이트하고 다시 실행해주세요.');
+    }
+  }
+
+  async requirePrioritySupport() {
+    let capabilities;
+    try {
+      capabilities = await this.request('/api/capabilities');
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      throw new Error('긴급도를 사용하려면 엔진을 업데이트하고 다시 실행해주세요.');
+    }
+    if (!capabilities.priority) throw new Error('긴급도를 사용하려면 엔진을 업데이트하고 다시 실행해주세요.');
   }
 
   async updateTodo(id, draft) {
@@ -226,3 +252,6 @@ class ApiClient {
 }
 
 window.api = new ApiClient();
+function nextTodoStatus(status) {
+  return ({ planned: 'in_progress', in_progress: 'done', done: 'planned', conditional_done: 'planned' })[status] || 'planned';
+}
