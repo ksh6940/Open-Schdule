@@ -6,6 +6,8 @@
 use std::io::{self, Write};
 
 use anyhow::{anyhow, bail, Result};
+#[cfg(windows)]
+use anyhow::Context;
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime};
 use serde_json::json;
 
@@ -123,6 +125,50 @@ pub fn parse_launch_action(raw_args: &[String]) -> LaunchAction {
     }
 
     LaunchAction::RunCliCommand(raw_args.to_vec())
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::{parse_launch_action, LaunchAction};
+
+    #[test]
+    fn interactive_and_one_shot_commands_remain_distinct() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_launch_action(&args(&["start", "-s"])),
+            LaunchAction::RunInteractiveCli
+        );
+        assert_eq!(
+            parse_launch_action(&args(&["start", "-s", "list", "--json"])),
+            LaunchAction::RunCliCommand(args(&["list", "--json"]))
+        );
+        assert_eq!(
+            parse_launch_action(&args(&["start", "-s", "program"])),
+            LaunchAction::RunGui
+        );
+    }
+}
+
+/// Windows에서 대화형 세션은 별도 콘솔로 열고, 파이프 입력은 현재 터미널에서 처리합니다.
+pub fn launch_interactive_cli() -> Result<()> {
+    #[cfg(windows)]
+    {
+        use std::io::IsTerminal;
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        const CHILD_MARKER: &str = "OPENSCHEDULE_INTERACTIVE_CONSOLE";
+        if std::env::var_os(CHILD_MARKER).is_none() && io::stdin().is_terminal() {
+            std::process::Command::new(std::env::current_exe()?)
+                .args(std::env::args_os().skip(1))
+                .env(CHILD_MARKER, "1")
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn()
+                .context("새 CLI 터미널을 열지 못했습니다")?;
+            return Ok(());
+        }
+    }
+    run_interactive_cli()
 }
 
 /// CLI 서브커맨드인지 판별합니다.

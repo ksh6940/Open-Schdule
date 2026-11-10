@@ -2,6 +2,9 @@
 
 let overlayTodos = [];
 let overlayCategories = [];
+let overlayVisible = false;
+let overlayLoadPromise = null;
+let overlayLoadPending = false;
 
 function getLocalDateStr() {
   const d = new Date();
@@ -22,19 +25,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  await api.ensureReady();
-  await loadOverlayData();
-
   if (window.electronAPI) {
+    if (window.electronAPI.onOverlayVisibility) {
+      window.electronAPI.onOverlayVisibility((visible) => {
+        overlayVisible = visible;
+        document.getElementById('overlay-card').classList.toggle('is-visible', visible);
+        if (visible) updateHeaderDate();
+      });
+    }
     if (window.electronAPI.onAgentReady) {
-      window.electronAPI.onAgentReady(() => loadOverlayData());
+      window.electronAPI.onAgentReady(() => {
+        if (overlayVisible) loadOverlayData();
+      });
     }
     if (window.electronAPI.onRefreshData) {
-      window.electronAPI.onRefreshData(() => loadOverlayData());
+      window.electronAPI.onRefreshData(() => {
+        if (overlayVisible) loadOverlayData();
+      });
     }
   }
 
-  setInterval(loadOverlayData, 8000);
+  await api.ensureReady();
+  await loadOverlayData();
 });
 
 function updateHeaderDate() {
@@ -49,6 +61,23 @@ function updateHeaderDate() {
 }
 
 async function loadOverlayData() {
+  overlayLoadPending = true;
+  if (overlayLoadPromise) return overlayLoadPromise;
+
+  overlayLoadPromise = (async () => {
+    while (overlayLoadPending) {
+      overlayLoadPending = false;
+      await performOverlayLoad();
+    }
+  })();
+  try {
+    await overlayLoadPromise;
+  } finally {
+    overlayLoadPromise = null;
+  }
+}
+
+async function performOverlayLoad() {
   try {
     const [todos, categories] = await Promise.all([
       api.getTodos({ date: 'today_and_overdue' }),
@@ -239,4 +268,3 @@ function escapeHtml(str) {
     "'": '&#039;',
   }[m]));
 }
-

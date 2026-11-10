@@ -13,9 +13,9 @@ if (typeof electronModule === 'string') {
   process.exit(0);
 }
 
-const { app, BrowserWindow, screen, ipcMain, Tray, Menu } = electronModule;
+const { app, BrowserWindow, screen, ipcMain, Tray, Menu, nativeImage } = electronModule;
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 
@@ -23,10 +23,13 @@ let mainWindow = null;
 let overlayWindow = null;
 let tray = null;
 let rustProcess = null;
+let isQuitting = false;
 
 let hotzoneEnteredAt = null;
 let leaveHotzoneAt = null;
 let isOverlayVisible = false;
+let overlayHideTimer = null;
+let overlayHideCanCancel = false;
 
 function getAgentInfoPaths() {
   const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
@@ -86,11 +89,10 @@ function ensureRustEngine() {
     });
   } else {
     console.log('[Rust Engine] Binary not found, spawning via cargo...');
-    rustProcess = spawn('cargo', ['run', '--release', '-p', 'openschedule-agent', '--', '--headless'], {
+    rustProcess = spawn('cargo', ['run', '--release', '-p', 'openschedule-agent', '--bin', 'openschedule-agent', '--', '--headless'], {
       cwd: path.join(__dirname, '..'),
       detached: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true,
     });
   }
 
@@ -138,6 +140,12 @@ function notifyWindowsAgentReady() {
   }
 }
 
+function quitApplication() {
+  if (isQuitting) return;
+  isQuitting = true;
+  app.quit();
+}
+
 // 1. 메인 관리 앱 윈도우 (Frameless + 메뉴바 제거 + Apple Design System)
 function createMainWindow() {
   Menu.setApplicationMenu(null);
@@ -182,6 +190,17 @@ function createMainWindow() {
     }
   });
 
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      if (tray) {
+        mainWindow.hide();
+      } else {
+        quitApplication();
+      }
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -190,17 +209,19 @@ function createMainWindow() {
 // 2. 상단 웹캠 핫존 드롭다운 오버레이 (Apple Dynamic Island Liquid Glass)
 function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
-  const { width: screenWidth } = primaryDisplay.bounds;
+  const { x: screenX, y: screenY, width: screenWidth } = primaryDisplay.bounds;
   const overlayWidth = 480;
   const overlayHeight = 440;
-  const x = Math.round((screenWidth - overlayWidth) / 2);
+  const x = screenX + Math.round((screenWidth - overlayWidth) / 2);
 
   overlayWindow = new BrowserWindow({
     width: overlayWidth,
     height: overlayHeight,
     x: x,
-    y: 0,
+    y: screenY,
     transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -215,10 +236,40 @@ function createOverlayWindow() {
   });
 
   overlayWindow.loadFile(path.join(__dirname, 'renderer', 'overlay.html'));
+  overlayWindow.webContents.on('did-finish-load', () => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) {
+      overlayWindow.webContents.send('overlay-visibility', isOverlayVisible);
+    }
+  });
 
   overlayWindow.on('closed', () => {
     overlayWindow = null;
   });
+}
+
+function showOverlay() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  if (overlayHideTimer) {
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
+  }
+  overlayHideCanCancel = false;
+  isOverlayVisible = true;
+  overlayWindow.showInactive();
+  overlayWindow.webContents.send('overlay-visibility', true);
+  overlayWindow.webContents.send('refresh-data');
+}
+
+function hideOverlay(canCancel = false) {
+  if (!overlayWindow || overlayWindow.isDestroyed() || overlayHideTimer) return;
+  isOverlayVisible = false;
+  overlayHideCanCancel = canCancel;
+  overlayWindow.webContents.send('overlay-visibility', false);
+  overlayHideTimer = setTimeout(() => {
+    overlayHideTimer = null;
+    overlayHideCanCancel = false;
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide();
+  }, 180);
 }
 
 // 웹캠 상단 핫존 마우스 커서 폴링
@@ -227,19 +278,30 @@ function startHotzonePolling() {
     if (!overlayWindow || overlayWindow.isDestroyed()) return;
 
     const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: screenWidth } = primaryDisplay.bounds;
+    const { x: screenX, y: screenY, width: screenWidth } = primaryDisplay.bounds;
     const cursor = screen.getCursorScreenPoint();
 
     // 웹캠 핫존: 화면 중앙 ±120px, 상단 Y <= 6px
-    const centerX = screenWidth / 2;
-    const inHotzone = cursor.y <= 6 && Math.abs(cursor.x - centerX) <= 120;
+    const centerX = screenX + screenWidth / 2;
+    const inHotzone = cursor.y >= screenY && cursor.y <= screenY + 6 && Math.abs(cursor.x - centerX) <= 120;
 
-    const overlayBounds = overlayWindow.getBounds();
-    const inOverlayArea =
-      cursor.x >= overlayBounds.x - 10 &&
-      cursor.x <= overlayBounds.x + overlayBounds.width + 10 &&
-      cursor.y >= 0 &&
-      cursor.y <= overlayBounds.y + overlayBounds.height + 15;
+    let inOverlayArea = false;
+    if (isOverlayVisible || overlayHideTimer) {
+      const overlayBounds = overlayWindow.getBounds();
+      inOverlayArea =
+        cursor.x >= overlayBounds.x - 10 &&
+        cursor.x <= overlayBounds.x + overlayBounds.width + 10 &&
+        cursor.y >= overlayBounds.y &&
+        cursor.y <= overlayBounds.y + overlayBounds.height + 15;
+    }
+
+    if (overlayHideTimer) {
+      if (overlayHideCanCancel && (inHotzone || inOverlayArea)) {
+        leaveHotzoneAt = null;
+        showOverlay();
+      }
+      return;
+    }
 
     const now = Date.now();
 
@@ -249,9 +311,7 @@ function startHotzonePolling() {
         hotzoneEnteredAt = now;
       } else if (now - hotzoneEnteredAt >= 150) {
         if (!isOverlayVisible) {
-          isOverlayVisible = true;
-          overlayWindow.show();
-          overlayWindow.webContents.send('refresh-data');
+          showOverlay();
         }
       }
     } else {
@@ -261,25 +321,24 @@ function startHotzonePolling() {
           if (!leaveHotzoneAt) {
             leaveHotzoneAt = now;
           } else if (now - leaveHotzoneAt >= 350) {
-            isOverlayVisible = false;
-            overlayWindow.hide();
+            hideOverlay(true);
           }
         } else {
           leaveHotzoneAt = null;
         }
       }
     }
-  }, 35);
+  }, 80);
 }
 
 // 시스템 트레이 설정
 function setupTray() {
   try {
-    const iconPath = path.join(__dirname, '..', 'crates', 'core', 'resources', 'icon.ico');
-    if (fs.existsSync(iconPath)) {
-      tray = new Tray(iconPath);
-    }
-  } catch (e) {}
+    const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAnUlEQVR4nNXUSxKAIAyDYa7smT2I7hzlIWmb0CEzbvm/BVLKdjvO6/dLiUox3ngYEQ2HIOy4CaGKwwhy8L05QBh/AEOEOP4BdBEr40oAFG8Aq+MNIiPOBLjiMwB6mDtuAYwODcWtgPrwcBy5A6MIJY5eQmTuC4y+Bfo48CtS4x5AjQjFuwDik+yLr0JMlw5QIkxLjTMhlKXGrZjddgOypyNATiZ/9QAAAABJRU5ErkJggg==');
+    tray = new Tray(icon);
+  } catch (e) {
+    console.error('[Tray] Failed to create system tray icon:', e);
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -296,14 +355,12 @@ function setupTray() {
     { type: 'separator' },
     {
       label: '종료',
-      click: () => {
-        app.quit();
-      },
+      click: quitApplication,
     },
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule v1.0');
+    tray.setToolTip('OpenSchedule v1.01');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {
@@ -342,9 +399,11 @@ ipcMain.on('window-maximize', () => {
 });
 
 ipcMain.on('window-close', () => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.close();
-  }
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+});
+
+ipcMain.on('app-quit', () => {
+  quitApplication();
 });
 
 ipcMain.on('open-manager', () => {
@@ -357,10 +416,7 @@ ipcMain.on('open-manager', () => {
 });
 
 ipcMain.on('hide-overlay', () => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    isOverlayVisible = false;
-    overlayWindow.hide();
-  }
+  hideOverlay();
 });
 
 // 앱 시작
@@ -424,16 +480,29 @@ function startDbWatcher() {
   }
 }
 
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
 app.on('will-quit', () => {
-  if (rustProcess) {
+  if (rustProcess && rustProcess.exitCode === null && rustProcess.pid) {
     try {
-      rustProcess.kill();
-    } catch (e) {}
+      if (process.platform === 'win32') {
+        const result = spawnSync('taskkill', ['/PID', String(rustProcess.pid), '/T', '/F'], { windowsHide: true });
+        if (result.error || result.status !== 0) {
+          console.error('[Rust Engine] Failed to stop process tree:', result.error || result.stderr.toString());
+        }
+      } else {
+        rustProcess.kill();
+      }
+    } catch (e) {
+      console.error('[Rust Engine] Failed to stop:', e);
+    }
   }
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin' && !tray) {
-    app.quit();
+    quitApplication();
   }
 });

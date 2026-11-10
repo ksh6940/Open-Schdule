@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenSchedule v1.0</title>
+  <title>OpenSchedule v1.01</title>
   <link rel="stylesheet" href="css/phosphor.css">
   <link rel="stylesheet" href="css/apple-theme.css">
   <link rel="stylesheet" href="css/app.css">
@@ -15,14 +15,14 @@
       <div class="nav-brand">
         <div class="brand-logo"><i class="ph-bold ph-check"></i></div>
         <span>OpenSchedule</span>
-        <span class="version-badge">v1.0</span>
+        <span class="version-badge">v1.01</span>
       </div>
 
       <nav class="nav-tabs no-drag">
-        <button class="nav-tab-btn active" data-tab="reminders">
+        <button class="nav-tab-btn active" data-tab="reminders" title="미리알림 & 캘린더">
           <i class="ph-bold ph-list-checks"></i> 미리알림 & 캘린더
         </button>
-        <button class="nav-tab-btn" data-tab="settings">
+        <button class="nav-tab-btn" data-tab="settings" title="설정 & CLI 가이드">
           <i class="ph-bold ph-terminal-window"></i> 설정 & CLI 가이드
         </button>
       </nav>
@@ -35,9 +35,9 @@
           <button class="apple-btn-compact" id="btn-open-new-todo-modal" title="새 일정 추가 (Ctrl+N)">
             <i class="ph-bold ph-calendar-plus"></i> 새 일정
           </button>
-          <span id="connection-status-pill" class="status-pill done" title="Rust 로컬 엔진 연결 상태">
-            <i class="ph-fill ph-circle"></i> 연결됨
-          </span>
+          <button type="button" id="connection-status-pill" class="status-pill in_progress" title="프로그램 및 백그라운드 엔진 종료" aria-label="프로그램 및 백그라운드 엔진 종료">
+            <i class="ph-bold ph-spinner"></i> 연결 중...
+          </button>
         </div>
 
         <div class="window-controls">
@@ -47,7 +47,7 @@
           <button class="win-ctrl-btn" id="btn-win-max" title="최대화 / 복원">
             <i class="ph-bold ph-corners-out" id="icon-win-max"></i>
           </button>
-          <button class="win-ctrl-btn close" id="btn-win-close" title="닫기">
+          <button class="win-ctrl-btn close" id="btn-win-close" title="트레이로 숨기기">
             <i class="ph-bold ph-x"></i>
           </button>
         </div>
@@ -142,7 +142,12 @@
 
             <div class="search-input-wrapper">
               <i class="ph-bold ph-magnifying-glass search-icon"></i>
-              <input type="text" class="apple-input center-search-input" id="search-input" placeholder="일정 검색 (/)...">
+              <input type="text" class="apple-input center-search-input" id="search-input" placeholder="일정 검색 (/)..."
+                aria-label="일정 검색" autocomplete="off">
+              <button type="button" class="search-clear-btn" id="btn-clear-search" aria-label="검색어 지우기"
+                title="검색어 지우기" hidden>
+                <i class="ph-bold ph-x"></i>
+              </button>
             </div>
           </div>
         </div>
@@ -326,7 +331,7 @@
         <!-- 2. OpenLab CLI & Claude Code 스타일 대화형 셸 가이드 -->
         <div class="apple-card">
           <h2 class="card-title">
-            <i class="ph-bold ph-terminal-window" style="color: var(--apple-primary);"></i> OpenLab CLI v1.0 & 일자별 JSON + SQLite 동기화
+            <i class="ph-bold ph-terminal-window" style="color: var(--apple-primary);"></i> OpenLab CLI v1.01 & 일자별 JSON + SQLite 동기화
           </h2>
           <p class="card-subtitle">
             일반 터미널에서 <code>openlab start -s</code>로 Claude Code 스타일 CLI를 실행하거나, <code>openlab start -s program</code>으로 본 Electron GUI 앱을 실행할 수 있습니다. 모든 일정은 SQLite(<code>todos.db</code>)와 <code>schedules/{date}_schedule.json</code>에 양방향 실시간 저장됩니다.

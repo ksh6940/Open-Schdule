@@ -1,6 +1,6 @@
-# OpenSchedule (OpenLab Schedule) v1.0
+# OpenSchedule (OpenLab Schedule) v1.01
 
-[![Version](https://img.shields.io/badge/version-1.0.0-0071e3?style=flat-square)](https://github.com/ksh6940/Open-Schdule)
+[![Version](https://img.shields.io/badge/version-1.0.1-0071e3?style=flat-square)](https://github.com/ksh6940/Open-Schdule)
 [![License](https://img.shields.io/badge/License-Apache_2.0-34c759?style=flat-square)](./LICENSE)
 [![Backend](https://img.shields.io/badge/Rust-Axum_%2B_SQLite-000000?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Frontend](https://img.shields.io/badge/Electron-Apple_Design_System-47848F?style=flat-square&logo=electron)](https://www.electronjs.org/)
@@ -11,7 +11,7 @@
 
 ---
 
-## ✨ 주요 특징 (v1.0)
+## ✨ 주요 특징 (v1.01)
 
 ### 1. 프레임리스 Apple Design System UI & 업그레이드된 UX
 - **Frameless Liquid Glass 크롬**: OS 기본 제목 표시줄과 메뉴 표시줄을 제거하고, 드래그 이동 영역과 커스텀 윈도우 컨트롤(최소화·최대화/복원·닫기)이 통합된 53px 상단 Liquid Glass 네비게이션 바를 제공합니다.
@@ -49,7 +49,7 @@
 
 ```mermaid
 flowchart LR
-    subgraph Frontend["Electron Desktop GUI (Frameless v1.0)"]
+    subgraph Frontend["Electron Desktop GUI (Frameless v1.01)"]
         MainWin["메인 관리 윈도우\n(투두리스트 / 캘린더 뷰)"]
         OverlayWin["웹캠 핫존 드롭다운\n(Dynamic Island 오버레이)"]
     end
@@ -104,7 +104,7 @@ cargo build --release --workspace
 터미널 어디서나 `openlab` 명령어로 CLI와 GUI 프로그램을 실행할 수 있습니다.
 
 ```powershell
-# 1) Claude Code 스타일 대화형 CLI 실행
+# 1) Claude Code 스타일 대화형 CLI 실행 (Windows에서는 새 콘솔 창)
 openlab start -s
 
 # 2) 프레임리스 Electron GUI 데스크톱 프로그램 실행
@@ -113,6 +113,12 @@ openlab start -s program
 # 또는 npm 스크립트로 GUI 직접 실행
 npm start
 ```
+
+Windows에서 대화형 `openlab start -s`는 새 콘솔을 엽니다. 단일 명령과
+파이프로 입력을 전달하는 대화형 실행은 기존 터미널에서 동작합니다.
+프로그램의 X 버튼은 창을 트레이로 숨기며, 트레이 아이콘을 클릭하면 다시 열립니다.
+완전히 종료하려면 상단 연결 상태 버튼 또는 트레이 메뉴의 **종료**를 누르세요.
+프로그램이 직접 시작한 백그라운드 엔진은 함께 종료되며, 별도로 실행 중이던 엔진은 유지됩니다.
 
 ### 3. 빌드된 `.exe` 실행 파일 위치
 
@@ -131,7 +137,7 @@ npm start
 ### 1. 대화형 셸 모드 (`openlab start -s`)
 
 ```text
-╭─── OpenLab Schedule v1.0.0 ──────────────────────────────────────────────╮
+╭─── OpenLab Schedule v1.0.1 ──────────────────────────────────────────────╮
 │                                                                          │
 │  ✻ Welcome to OpenLab Schedule CLI!                                      │
 │                                                                          │

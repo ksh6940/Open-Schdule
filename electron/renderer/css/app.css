@@ -491,11 +491,39 @@
   pointer-events: none;
 }
 
+.search-clear-btn {
+  position: absolute;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--apple-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-clear-btn:hover {
+  background: var(--apple-surface-active);
+  color: var(--apple-foreground);
+}
+
+.search-clear-btn:focus-visible {
+  outline: 2px solid var(--apple-primary);
+}
+
+.search-clear-btn[hidden] {
+  display: none;
+}
+
 .center-search-input {
   width: 190px;
   height: 36px;
   font-size: 14px;
-  padding: 6px 12px 6px 32px;
+  padding: 6px 34px 6px 32px;
   border-radius: var(--radius-pill);
 }
 
@@ -1130,4 +1158,129 @@
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%) translateY(10px);
+}
+
+@media (max-width: 1100px) {
+  .main-content {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .sidebar-col {
+    width: 220px;
+    padding: 14px;
+  }
+
+  .center-col {
+    min-width: 0;
+    padding: 18px;
+  }
+
+  .inspector-col {
+    width: 270px;
+    padding: 16px;
+  }
+
+  .center-title {
+    font-size: 32px;
+    line-height: 36px;
+  }
+
+  .center-title-group {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .calendar-nav-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .cal-json-badge {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 980px) {
+  .top-navbar {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .nav-brand {
+    gap: 6px;
+    font-size: 15px;
+  }
+
+  .nav-tabs {
+    flex: 0 0 auto;
+  }
+
+  .nav-tab-btn {
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .nav-tab-btn i {
+    font-size: 16px;
+  }
+
+  .nav-right-group,
+  .nav-actions {
+    gap: 5px;
+  }
+
+  .nav-actions .apple-btn-outline,
+  .nav-actions .apple-btn-compact {
+    padding-right: 9px;
+    padding-left: 9px;
+  }
+
+  .sidebar-col {
+    width: 190px;
+    padding: 12px;
+  }
+
+  .center-col {
+    padding: 14px;
+  }
+
+  .inspector-col {
+    width: 240px;
+    padding: 14px;
+  }
+
+  .todo-row {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .todo-row-actions {
+    gap: 3px;
+  }
+
+  .todo-row-actions .status-pill {
+    font-size: 11px;
+    padding: 3px 6px;
+  }
+
+  .cal-day-cell {
+    min-height: 54px;
+    padding: 5px;
+  }
+
+  .cal-day-item-dot {
+    font-size: 10px;
+  }
+}
+
+@media (hover: none) {
+  .row-action-btn {
+    opacity: 1;
+  }
 }

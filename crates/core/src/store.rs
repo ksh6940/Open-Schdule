@@ -52,7 +52,7 @@ pub struct DailyScheduleFile {
     pub todos: Vec<TodoJsonEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TodoJsonEntry {
     #[serde(default)]
     pub id: i64,
@@ -79,6 +79,21 @@ pub struct TodoJsonEntry {
 
 fn default_due_date() -> NaiveDate {
     Local::now().date_naive()
+}
+
+fn schedule_matches(path: &Path, date: &str, entries: &[TodoJsonEntry]) -> Result<bool> {
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("JSON 파일 읽기 실패: {}", path.display())),
+    };
+    let value: serde_json::Value = serde_json::from_slice(&raw)
+        .with_context(|| format!("JSON 파싱 실패: {}", path.display()))?;
+    let existing = match serde_json::from_value::<DailyScheduleFile>(value) {
+        Ok(existing) => existing,
+        Err(_) => return Ok(false),
+    };
+    Ok(existing.date == date && existing.count == entries.len() && existing.todos == entries)
 }
 
 pub struct Store {
@@ -118,7 +133,7 @@ const DEFAULT_CATEGORIES: &[(&str, u32)] = &[
 impl Store {
     pub fn open_default() -> Result<Self> {
         let store = Self::open(&crate::paths::db_path())?;
-        let _ = store.sync_all_json_files();
+        store.sync_all_json_files()?;
         Ok(store)
     }
 
@@ -204,17 +219,27 @@ impl Store {
             return Ok(primary_path);
         }
 
+        let date_string = date.format("%Y-%m-%d").to_string();
+        let write_primary = !schedule_matches(&primary_path, &date_string, &entries)?;
+        let write_backup = appdata_path != primary_path
+            && !schedule_matches(&appdata_path, &date_string, &entries)?;
+        if !write_primary && !write_backup {
+            return Ok(primary_path);
+        }
+
         let file_data = DailyScheduleFile {
-            date: date.format("%Y-%m-%d").to_string(),
+            date: date_string,
             updated_at: Local::now().to_rfc3339(),
             count: entries.len(),
             todos: entries,
         };
 
         let json_str = serde_json::to_string_pretty(&file_data)?;
-        std::fs::write(&primary_path, &json_str)?;
-        if appdata_path != primary_path {
-            let _ = std::fs::write(&appdata_path, &json_str);
+        if write_primary {
+            std::fs::write(&primary_path, &json_str)?;
+        }
+        if write_backup {
+            std::fs::write(&appdata_path, &json_str)?;
         }
         Ok(primary_path)
     }
@@ -284,10 +309,10 @@ impl Store {
             let resolved_date = file_date.or(header_date).unwrap_or(entry.due_date);
 
             // 동일한 ID가 있거나 (같은 날짜 + 같은 제목)이 있는지 확인
-            let exists_by_id = if entry.id > 0 {
-                self.get(entry.id)?.is_some()
+            let existing = if entry.id > 0 {
+                self.get(entry.id)?
             } else {
-                false
+                None
             };
 
             let draft = TodoDraft {
@@ -300,22 +325,24 @@ impl Store {
                 condition_note: entry.condition_note,
             };
 
-            if exists_by_id {
-                self.conn.execute(
-                    "UPDATE todos SET title=?1, memo=?2, category_id=?3, due_date=?4, due_time=?5, status=?6,
+            if let Some(existing) = existing {
+                if existing.to_draft() != draft || existing.updated_at != entry.updated_at {
+                    self.conn.execute(
+                        "UPDATE todos SET title=?1, memo=?2, category_id=?3, due_date=?4, due_time=?5, status=?6,
                          condition_note=?7, updated_at=?8 WHERE id=?9",
-                    params![
-                        draft.title,
-                        draft.memo,
-                        draft.category_id,
-                        draft.due_date.format("%Y-%m-%d").to_string(),
-                        draft.due_time.map(|t| t.format("%H:%M").to_string()),
-                        draft.status.as_db(),
-                        draft.condition_note,
-                        entry.updated_at.to_rfc3339(),
-                        entry.id
-                    ],
-                )?;
+                        params![
+                            draft.title,
+                            draft.memo,
+                            draft.category_id,
+                            draft.due_date.format("%Y-%m-%d").to_string(),
+                            draft.due_time.map(|t| t.format("%H:%M").to_string()),
+                            draft.status.as_db(),
+                            draft.condition_note,
+                            entry.updated_at.to_rfc3339(),
+                            entry.id
+                        ],
+                    )?;
+                }
             } else {
                 // 같은 날짜 + 같은 제목이 없을 때만 새로 추가
                 let dup: Option<i64> = self
@@ -799,6 +826,54 @@ pub struct SmartCounts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_json_import_does_not_write_to_database() {
+        let s = Store::open_in_memory().unwrap();
+        let date = Local::now().date_naive();
+        let id = s.add(&TodoDraft::new("test", date)).unwrap();
+        let todo = s.get(id).unwrap().unwrap();
+        let entry = TodoJsonEntry {
+            id,
+            title: todo.title,
+            memo: todo.memo,
+            category_id: todo.category_id,
+            category_name: "미분류".into(),
+            due_date: todo.due_date,
+            due_time: todo.due_time,
+            status: todo.status,
+            condition_note: todo.condition_note,
+            created_at: todo.created_at,
+            updated_at: todo.updated_at,
+        };
+        let file = DailyScheduleFile {
+            date: date.to_string(),
+            updated_at: Local::now().to_rfc3339(),
+            count: 1,
+            todos: vec![entry],
+        };
+        let path = std::env::temp_dir().join(format!(
+            "openschedule-test-{}-{}.json",
+            std::process::id(),
+            Local::now().timestamp_nanos_opt().unwrap()
+        ));
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+
+        assert!(schedule_matches(&path, &file.date, &file.todos).unwrap());
+        let changes = s.conn.total_changes();
+        s.import_date_json_file(&path).unwrap();
+        assert_eq!(s.conn.total_changes(), changes);
+
+        let mut modified = file.clone();
+        modified.todos[0].title = "changed".into();
+        assert!(!schedule_matches(&path, &modified.date, &modified.todos).unwrap());
+        std::fs::write(&path, serde_json::to_string(&modified).unwrap()).unwrap();
+        s.import_date_json_file(&path).unwrap();
+        assert_eq!(s.get(id).unwrap().unwrap().title, "changed");
+        std::fs::write(&path, "{ invalid").unwrap();
+        assert!(schedule_matches(&path, &file.date, &file.todos).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn crud_and_filters() {

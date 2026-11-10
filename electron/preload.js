@@ -39,9 +39,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimizeWindow: () => ipcRenderer.send('window-minimize'),
   maximizeWindow: () => ipcRenderer.send('window-maximize'),
   closeWindow: () => ipcRenderer.send('window-close'),
+  quitApplication: () => ipcRenderer.send('app-quit'),
   onWindowMaximized: (callback) => ipcRenderer.on('window-maximized', (_e, isMax) => callback(isMax)),
   openManager: () => ipcRenderer.send('open-manager'),
   hideOverlay: () => ipcRenderer.send('hide-overlay'),
+  onOverlayVisibility: (callback) => ipcRenderer.on('overlay-visibility', (_e, visible) => callback(visible)),
   onRefreshData: (callback) => ipcRenderer.on('refresh-data', callback),
   onAgentReady: (callback) => ipcRenderer.on('agent-ready', callback),
 });

@@ -12,6 +12,15 @@ use std::process::Command;
 use openschedule_core::cli::{parse_launch_action, LaunchAction};
 
 fn find_workspace_root() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let packaged_app = dir.join("resources").join("app");
+            if packaged_app.join("electron").join("main.js").exists() {
+                return packaged_app;
+            }
+        }
+    }
+
     let compile_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
@@ -34,6 +43,23 @@ fn find_workspace_root() -> PathBuf {
 fn launch_electron_program() -> anyhow::Result<()> {
     let root = find_workspace_root();
     let main_js = root.join("electron").join("main.js");
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let packaged_electron = dir.join(if cfg!(windows) {
+                "OpenSchedule-App.exe"
+            } else {
+                "electron"
+            });
+            if root == dir.join("resources").join("app") && packaged_electron.exists() {
+                Command::new(packaged_electron)
+                    .current_dir(&root)
+                    .env_remove("ELECTRON_RUN_AS_NODE")
+                    .spawn()?;
+                return Ok(());
+            }
+        }
+    }
 
     let dist_exe = root
         .join("node_modules")
@@ -116,7 +142,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     match parse_launch_action(&raw_args) {
-        LaunchAction::RunInteractiveCli => openschedule_core::cli::run_interactive_cli(),
+        LaunchAction::RunInteractiveCli => openschedule_core::cli::launch_interactive_cli(),
         LaunchAction::RunCliCommand(cmd_args) => openschedule_core::cli::run_cli(&cmd_args),
         LaunchAction::RunGui => launch_electron_program(),
     }

@@ -24,6 +24,10 @@ const state = {
 };
 
 let toastTimeout = null;
+let searchDebounceTimeout = null;
+let todoLoadRequestId = 0;
+let refreshPromise = null;
+let refreshPending = false;
 
 function showToast(message) {
   const toast = document.getElementById('apple-toast');
@@ -101,8 +105,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // 8초마다 자동 갱신
-  setInterval(() => refreshAll(false), 8000);
 });
 
 // ── 프레임리스 윈도우 컨트롤 ──
@@ -111,6 +113,15 @@ function setupWindowControls() {
   const btnMax = document.getElementById('btn-win-max');
   const btnClose = document.getElementById('btn-win-close');
   const iconMax = document.getElementById('icon-win-max');
+  const btnQuit = document.getElementById('connection-status-pill');
+
+  if (btnQuit) {
+    btnQuit.addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.quitApplication) {
+        window.electronAPI.quitApplication();
+      }
+    });
+  }
 
   if (btnMin) {
     btnMin.addEventListener('click', () => {
@@ -199,6 +210,23 @@ async function initEngineConnection() {
 }
 
 async function refreshAll(full = true) {
+  refreshPending = true;
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    while (refreshPending) {
+      refreshPending = false;
+      await performRefresh();
+    }
+  })();
+  try {
+    await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
+}
+
+async function performRefresh() {
   try {
     const [smartCounts, categoryCounts, categories, allTodos] = await Promise.all([
       api.getSmartCounts(),
@@ -227,6 +255,11 @@ async function refreshAll(full = true) {
 }
 
 async function loadTodos() {
+  if (searchDebounceTimeout) {
+    clearTimeout(searchDebounceTimeout);
+    searchDebounceTimeout = null;
+  }
+  const requestId = ++todoLoadRequestId;
   const params = {};
 
   if (state.viewMode === 'calendar') {
@@ -252,11 +285,14 @@ async function loadTodos() {
 
   try {
     const todos = await api.getTodos(params);
+    if (requestId !== todoLoadRequestId) return;
     state.todos = todos || [];
     renderTodoList();
     updateScheduleFileIndicator();
   } catch (err) {
-    console.error('Failed to load todos:', err);
+    if (requestId === todoLoadRequestId) {
+      console.error('Failed to load todos:', err);
+    }
   }
 }
 
@@ -465,12 +501,42 @@ function setupNavigation() {
   });
 
   const searchInput = document.getElementById('search-input');
+  const clearSearchButton = document.getElementById('btn-clear-search');
+
+  const clearSearch = () => {
+    if (searchDebounceTimeout) {
+      clearTimeout(searchDebounceTimeout);
+      searchDebounceTimeout = null;
+    }
+    todoLoadRequestId += 1;
+    state.searchQuery = '';
+    if (searchInput) {
+      searchInput.value = '';
+      searchInput.focus();
+    }
+    if (clearSearchButton) clearSearchButton.hidden = true;
+    loadTodos();
+  };
+
   if (searchInput) {
     searchInput.addEventListener('input', (e) => {
+      todoLoadRequestId += 1;
       state.searchQuery = e.target.value;
-      loadTodos();
+      if (clearSearchButton) clearSearchButton.hidden = !state.searchQuery;
+      if (searchDebounceTimeout) clearTimeout(searchDebounceTimeout);
+      searchDebounceTimeout = setTimeout(() => {
+        searchDebounceTimeout = null;
+        loadTodos();
+      }, 250);
+    });
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && searchInput.value) {
+        e.preventDefault();
+        clearSearch();
+      }
     });
   }
+  if (clearSearchButton) clearSearchButton.addEventListener('click', clearSearch);
 }
 
 // ── 스마트 카드 (오늘, 예정, 전체, 완료됨) ──
