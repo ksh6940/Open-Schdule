@@ -1,6 +1,7 @@
 //! OpenSchedule 공통 모듈: 데이터 모델, SQLite 저장소, 설정, 테마, CLI.
 
 pub mod cli;
+pub mod management;
 pub mod model;
 pub mod paths;
 pub mod settings;

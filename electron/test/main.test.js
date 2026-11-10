@@ -5,7 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-async function startMain({ trayFails = false, existingAgent = false, settings = null, lock = true } = {}) {
+async function startMain({ trayFails = false, existingAgent = false, settings = null, lock = true, argv = [] } = {}) {
   const windows = [];
   const intervals = [];
   const timers = new Map();
@@ -101,7 +101,7 @@ async function startMain({ trayFails = false, existingAgent = false, settings = 
       return require(name);
     },
     __dirname: path.join(__dirname, '..'),
-    process: { env: {}, platform: 'win32', execPath: 'electron.exe', kill() {} },
+    process: { env: {}, platform: 'win32', execPath: 'electron.exe', argv, kill() {} },
     console: { log() {}, warn() {}, error() {} },
     Date: class extends Date { static now() { return now; } },
     setInterval: callback => { intervals.push(callback); },
@@ -176,6 +176,22 @@ test('overlay transitions on every show and cancels an automatic hide on re-entr
 
 test('duplicate application exits before creating windows', async () => {
   const main = await startMain({ lock: false });
+  assert.equal(main.getQuitCount(), 1);
+  assert.equal(main.windows.length, 0);
+  assert.equal(main.getSpawned(), 0);
+});
+
+test('quit request from second instance exits without restoring the window', async () => {
+  const main = await startMain();
+  main.ipc.emit('window-close');
+  main.app.emit('second-instance', {}, ['electron.exe', '--openlab-quit']);
+  assert.equal(main.getQuitCount(), 1);
+  assert.equal(main.windows[0].visible, false);
+  assert.equal(main.getStopped().command, 'taskkill');
+});
+
+test('quit request with no existing instance does not start the app or engine', async () => {
+  const main = await startMain({ argv: ['electron.exe', '--openlab-quit'] });
   assert.equal(main.getQuitCount(), 1);
   assert.equal(main.windows.length, 0);
   assert.equal(main.getSpawned(), 0);

@@ -430,7 +430,7 @@ function setupTray() {
   ]);
 
   if (tray) {
-    tray.setToolTip('OpenSchedule v1.03');
+    tray.setToolTip('OpenSchedule v1.04');
     tray.setContextMenu(contextMenu);
     tray.on('click', () => {
       if (mainWindow) {
@@ -495,8 +495,14 @@ ipcMain.on('reload-hotzone-settings', reloadHotzoneSettings);
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) {
   app.quit();
+} else if (process.argv.includes('--openlab-quit')) {
+  app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    if (argv.includes('--openlab-quit')) {
+      quitApplication();
+      return;
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();

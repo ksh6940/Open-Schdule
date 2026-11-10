@@ -17,18 +17,22 @@ const candidates = [
   path.join(__dirname, 'target', 'debug', 'openschedule-agent.exe'),
   path.join(__dirname, 'target', 'release', 'openschedule-agent.exe'),
 ];
+if (path.basename(__dirname) === 'app' && path.basename(path.dirname(__dirname)) === 'resources') {
+  candidates.push(path.join(__dirname, '..', '..', 'openlab.exe'));
+}
 
 const exe = candidates.find(p => fs.existsSync(p));
 
 if (exe) {
   const res = spawnSync(exe, args, { stdio: 'inherit' });
-  process.exit(res.status ?? 0);
+  if (res.error) console.error('CLI 실행 실패:', res.error.message);
+  process.exit(res.status ?? 1);
 } else {
   const res = spawnSync(
     'cargo',
     ['run', '-q', '--bin', 'openlab', '--', ...args],
     { cwd: __dirname, stdio: 'inherit', shell: true }
   );
-  process.exit(res.status ?? 0);
+  if (res.error) console.error('CLI 실행 실패:', res.error.message);
+  process.exit(res.status ?? 1);
 }
-

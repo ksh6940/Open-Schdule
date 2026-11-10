@@ -549,6 +549,9 @@ fn handle_natural_language_add(store: &Store, input: &str) -> Result<()> {
 
 pub fn run_cli(args: &[String]) -> Result<()> {
     enable_ansi_support();
+    if crate::management::is_management_command(args) {
+        return crate::management::run(args);
+    }
     if args.is_empty() || matches!(args[0].as_str(), "help" | "--help" | "-h" | "/help") {
         print_help();
         return Ok(());
@@ -612,6 +615,8 @@ pub fn print_help() {
     println!(
         "{C_CLAUDE}│{C_RESET}    {C_CLAUDE}openlab start -s <명령> [옵션]{C_RESET}   단일 명령 즉시 실행 (AI 연동)        {C_CLAUDE}│{C_RESET}"
     );
+    println!("    openlab quit [--force]     현재 설치의 GUI/엔진 종료");
+    println!("    openlab delete --help      버전, 프로그램, 캐시, 데이터 삭제");
     println!(
         "{C_CLAUDE}├──────────────────────────────────────────────────────────────────────────┤{C_RESET}"
     );

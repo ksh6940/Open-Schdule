@@ -1,6 +1,6 @@
-# OpenSchedule (OpenLab Schedule) v1.03
+# OpenSchedule (OpenLab Schedule) v1.04
 
-[![Version](https://img.shields.io/badge/version-1.0.3-0071e3?style=flat-square)](https://github.com/ksh6940/Open-Schdule)
+[![Version](https://img.shields.io/badge/version-1.0.4-0071e3?style=flat-square)](https://github.com/ksh6940/Open-Schdule)
 [![License](https://img.shields.io/badge/License-Apache_2.0-34c759?style=flat-square)](./LICENSE)
 [![Backend](https://img.shields.io/badge/Rust-Axum_%2B_SQLite-000000?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Frontend](https://img.shields.io/badge/Electron-Apple_Design_System-47848F?style=flat-square&logo=electron)](https://www.electronjs.org/)
@@ -11,7 +11,7 @@
 
 ---
 
-## ✨ 주요 특징 (v1.03)
+## ✨ 주요 특징 (v1.04)
 
 ### 1. 프레임리스 Apple Design System UI & 업그레이드된 UX
 - **Frameless Liquid Glass 크롬**: OS 기본 제목 표시줄과 메뉴 표시줄을 제거하고, 드래그 이동 영역과 커스텀 윈도우 컨트롤(최소화·최대화/복원·닫기)이 통합된 53px 상단 Liquid Glass 네비게이션 바를 제공합니다.
@@ -53,7 +53,7 @@
 
 ```mermaid
 flowchart LR
-    subgraph Frontend["Electron Desktop GUI (Frameless v1.03)"]
+    subgraph Frontend["Electron Desktop GUI (Frameless v1.04)"]
         MainWin["메인 관리 윈도우\n(투두리스트 / 캘린더 뷰)"]
         OverlayWin["웹캠 핫존 드롭다운\n(Dynamic Island 오버레이)"]
     end
@@ -125,6 +125,32 @@ Windows에서 대화형 `openlab start -s`는 새 콘솔을 엽니다. 단일 �
 프로그램이 직접 시작한 백그라운드 엔진은 함께 종료되며, 별도로 실행 중이던 엔진은 유지됩니다.
 중복 실행 시 기존 창이 열리며, 연결 상태 버튼이나 트레이 메뉴의 종료는 오버레이와 트레이도 종료합니다.
 
+### 종료 및 삭제 명령 (Windows)
+
+```powershell
+openlab quit                         # 현재 설치의 GUI와 직접 시작한 엔진을 정상 종료
+openlab quit --force                 # 현재 설치 경로에서 확인된 GUI와 엔진을 강제 종료
+openlab delete --help
+openlab delete --version 1.02        # dist의 OpenSchedule-v1.02-win32-x64 폴더 삭제
+openlab delete --program "C:\경로\OpenSchedule-v1.02-win32-x64"
+openlab delete --cache               # OpenSchedule 전용 Electron 캐시만 삭제
+openlab delete --data                # 일정 JSON, DB, 설정 및 엔진 정보 삭제
+```
+
+`quit`은 별도로 실행한 엔진을 유지합니다. `--force`는 해당 설치 경로의 엔진도
+강제 종료하며 저장하지 않은 작업이 손실될 수 있습니다. 구버전 GUI는 정상 종료
+요청을 처리하지 못할 수 있으므로 필요한 경우 `--force`를 사용하세요.
+삭제는 실행 중인 OpenSchedule GUI와 엔진을 모두 종료한 뒤 가능합니다. 대상 경로를
+표시하고 `DELETE` 입력을 요구하며, 자동화에서는 `--yes`로 확인을 생략할 수 있습니다.
+`--version`은 버전 또는 배포 폴더 경로를 받으며 `--program`은 배포 폴더 경로를
+받습니다. 배포 폴더 전체가 삭제되므로 그 안의 개인 파일도 먼저 확인하세요.
+Windows에서 실행 중인 CLI가 들어 있는 폴더는 삭제할 수 없으므로 다른 버전이나
+프로젝트의 `openlab`으로 삭제하세요. ZIP 파일은 자동 삭제하지 않습니다.
+데이터 삭제는 `%APPDATA%\OpenSchedule`의 데이터와 일정 JSON 및 존재하는 프로젝트의
+`schedules` 일정 JSON을 지우므로 먼저 백업하세요. 개발 환경에서 다른 Electron 앱과
+공유할 수 있는 `%APPDATA%\Electron` 캐시는 삭제하지 않습니다.
+기존 일정 삭제 명령 `openlab delete <ID>`는 그대로 사용할 수 있습니다.
+
 ### 3. 빌드된 `.exe` 실행 파일 위치
 
 `cargo build --release --workspace` 및 패키징 실행 시 다음 경로에 독립 실행 파일(`.exe`)이 생성됩니다:
@@ -142,7 +168,7 @@ Windows에서 대화형 `openlab start -s`는 새 콘솔을 엽니다. 단일 �
 ### 1. 대화형 셸 모드 (`openlab start -s`)
 
 ```text
-╭─── OpenLab Schedule v1.0.3 ──────────────────────────────────────────────╮
+╭─── OpenLab Schedule v1.0.4 ──────────────────────────────────────────────╮
 │                                                                          │
 │  ✻ Welcome to OpenLab Schedule CLI!                                      │
 │                                                                          │
